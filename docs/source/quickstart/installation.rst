@@ -1,20 +1,7 @@
 Installation
 =============
 
-To install MEGPrep, you need to ensure that Nextflow and Docker are installed on your system. Please follow these steps for installation:
-
-Install Nextflow
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-You can install Nextflow using the following command:
-
-.. code-block:: bash
-
-    $ curl -s https://get.nextflow.io | bash
-    $ chmod +x nextflow
-    $ mkdir -p $HOME/.local/bin/
-    $ mv nextflow $HOME/.local/bin/
-    $ nextflow info # Confirm that Nextflow is installed correctly
+To install MEGPrep, you need to ensure that Docker are installed on your system. Please follow these steps for installation:
 
 
 Install Docker
