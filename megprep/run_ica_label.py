@@ -51,7 +51,7 @@ def main():
         ic_outlier: true # detect artifact ICs by rules.
     
         find_bads_eog:
-            ch_name: BIO001 # or the ch_name of EOG.
+            ch_name: null # or the ch_name of EOG.
             threshold: auto
             l_freq: 1
             h_freq: 10
@@ -75,6 +75,7 @@ def main():
             h_freq: 45
     
         ICA_classify:
+            meg_vendor: neuromag # neuromag or ctf or quanmag_opm or quspin_opm
             explained_var:
                 threshold: 0.1
                 ch_type: mag
