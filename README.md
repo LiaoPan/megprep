@@ -9,7 +9,55 @@ MEGPrep is a robust and fully automated preprocessing pipeline optimized for lar
 For installation and usage instructions for MEGPrep, please see the documentation page: https://megprep.readthedocs.io/en/latest/quickstart/installation.html
 
 
+
+
 ## Get Started
+
+
+### MegPrep Docker Image Pull Guide
+
+Prerequisites
+-------------
+
+- Docker installed on your system (Linux, Windows, or macOS). For installation instructions, refer to the official Docker documentation: https://docs.docker.com/engine/install/
+- A computer with internet access.
+- Administrative privileges (if needed for Docker operations).
+- At least 8GB of RAM recommended for running Docker containers.
+
+
+Pulling the MegPrep Image
+-------------------------
+
+With Docker installed, you can pull the ``megprep:<version>`` image from Docker Hub.
+
+1. Open a terminal (or Command Prompt/PowerShell on Windows).
+
+2. Run the pull command:
+
+   .. code-block:: bash
+
+      docker pull megprep:<version>
+
+3. Verify the image is downloaded:
+
+   .. code-block:: bash
+
+      docker images
+
+   You should see ``megprep`` with tag ``<version>`` in the list.
+
+
+Running the Container
+---------------------
+
+To run the container after pulling:
+
+.. code-block:: bash
+
+   docker run megprep:<version> -h
+
+For more help, visit https://docs.docker.com/ or the [MegPrep documentation](megprep.readthedocs.io/en/latest/).
+
 
 ### Run MEGPrep via Docker to perform MRI data (T1w) preprocessing
 ```bash
