@@ -56,7 +56,7 @@ To run the container after pulling:
 $ docker run megprep:<version> -h
 ```
 
-For more help, visit https://docs.docker.com/ or the [MegPrep documentation](megprep.readthedocs.io/en/latest/).
+For more help, visit https://docs.docker.com/ or the [MEGPrep documentation](megprep.readthedocs.io/en/latest/).
 
 
 ### Run MEGPrep via Docker to perform MRI data (T1w) preprocessing
