@@ -58,6 +58,9 @@ $ docker run megprep:<version> -h
 
 For more help, visit https://docs.docker.com/ or the [MEGPrep documentation](megprep.readthedocs.io/en/latest/).
 
+### MEGPrep Parameters Settings
+
+For the MEGPrep parameter settings, please refer to [MEGPrep Parameters Template](nextflow/nextflow.config).
 
 ### Run MEGPrep via Docker to perform MRI data (T1w) preprocessing
 ```bash
