@@ -62,6 +62,8 @@ For more help, visit https://docs.docker.com/ or the [MEGPrep documentation](meg
 
 For the MEGPrep parameter settings, please refer to [MEGPrep Parameters Template](nextflow/nextflow.config).
 
+-------------
+
 ### Run MEGPrep via Docker to perform MRI data (T1w) preprocessing
 ```bash
 # Key parameter settings in `nextflow_for_anat.config:`
