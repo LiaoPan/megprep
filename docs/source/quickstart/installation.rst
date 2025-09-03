@@ -12,7 +12,7 @@ Install Docker according to your operating system. For detailed installation ins
     $ docker info # Confirm that docker is installed correctly
 
 
-`Install Singularity <https://docs.sylabs.io/guides/3.5/user-guide/index.html>`_ [options]
+.. `Install Singularity <https://docs.sylabs.io/guides/3.5/user-guide/index.html>`_ [options]
 
 
 Download MEGPrep Image

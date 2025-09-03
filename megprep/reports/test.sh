@@ -1,2 +1,3 @@
-export DATASET_REPORT_PATH=/data/liaopan/datasets/SMN4Lang/g_dask
-streamlit run reports.py --server.port=8501 --server.headless=true
+export DATASET_REPORT_PATH=/data/liaopan/megprep_demo/cog_dataset/derivatives
+export SUBJECTS_DIR=/data/liaopan/megprep_demo/cog_dataset/smri
+streamlit run reports.py --server.port=8502 --server.headless=true

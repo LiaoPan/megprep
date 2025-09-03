@@ -8,7 +8,7 @@ st.session_state.dataset_report_path = dataset_report_path
 subjects_dir = os.getenv('SUBJECTS_DIR', '/smri')
 st.session_state.subjects_dir = subjects_dir
 
-st.set_page_config(page_title="MEG Prep Reports", layout="wide", page_icon=":material/edit:",)
+st.set_page_config(page_title="MEG Prep Reports", layout="wide", page_icon="_static/favicon.png",)
 # st.write("## Welcome to MEG Prep Reports!")
 # st.sidebar.success("Preprocess")
 

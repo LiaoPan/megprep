@@ -188,8 +188,8 @@ Run MEGPrep
 
     docker run -it --rm \
         -v /data/datasets/SMN4Lang:/input \
-        -v /data/datasets/SMN4Lang/test_v3.5:/output \
-        -v /data/datasets/SMN4Lang_smri:/smri \
+        -v /data/datasets/SMN4Lang/preprocessed:/output \
+        -v /data/datasets/SMN4Lang/smri:/smri \
         -v /data/megprep/license.txt:/fs_license.txt \
         -v /data/megprep/nextflow/nextflow.config:/program/nextflow/nextflow.config \
         megprep:0.0.3 \
