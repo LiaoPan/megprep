@@ -17,7 +17,6 @@ For installation and usage instructions for MEGPrep, please see the documentatio
 ### MegPrep Docker Image Pull Guide
 
 #### Prerequisites
--------------
 
 - Docker installed on your system (Linux, Windows, or macOS). For installation instructions, refer to the official Docker documentation: https://docs.docker.com/engine/install/
 - A computer with internet access.
@@ -25,8 +24,9 @@ For installation and usage instructions for MEGPrep, please see the documentatio
 - At least 8GB of RAM recommended for running Docker containers.
 
 
-#### Pulling the MegPrep Image
 -------------------------
+
+#### Pulling the MegPrep Image
 
 With Docker installed, you can pull the ``megprep:<version>`` image from Docker Hub.
 
@@ -46,9 +46,9 @@ $ docker images
 
    You should see ``megprep`` with tag ``<version>`` in the list.
 
+---------------------
 
 #### Running the Container
----------------------
 
 To run the container after pulling:
 
@@ -57,6 +57,9 @@ $ docker run megprep:<version> -h
 ```
 
 For more help, visit https://docs.docker.com/ or the [MEGPrep documentation](megprep.readthedocs.io/en/latest/).
+
+
+-------------
 
 ### MEGPrep Parameters Settings
 
