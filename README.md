@@ -3,11 +3,14 @@
 
 MEGPrep is a robust and fully automated preprocessing pipeline optimized for large-scale MEG studies and compliant with Brain Imaging Data Structure (BIDS) standards.
 
+[![Documentation Status](https://readthedocs.org/projects/megprep/badge/?version=latest)](https://megprep.readthedocs.io/en/latest/?badge=latest)
 
-[//]: # ([![Documentation]&#40;https://readthedocs.org/projects/megprep/badge/?version=latest&#41;]&#40;https://megprep.readthedocs.io/&#41;)
-[![PyPI License](https://img.shields.io/pypi/l/megprep.svg?color)](LICENSCE.md)
+[![Documentation Status][rtd-badge]][rtd-link]
 
+[rtd-badge]: https://readthedocs.org/projects/megprep/badge/?version=latest
+[rtd-link]:  https://megprep.readthedocs.io/en/latest/?badge=latest
 
+[![docs](https://img.shields.io/readthedocs/megprep/stable?logo=readthedocs&label=docs)](https://megprep.readthedocs.io/en/stable/)
 
 ## Installation
 For installation and usage instructions for MEGPrep, please see the documentation page: https://megprep.readthedocs.io/en/latest/installation.html
