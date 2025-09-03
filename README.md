@@ -11,4 +11,4 @@ For installation and usage instructions for MEGPrep, please see the documentatio
 
 
 ## License
-MIT License
+MEGPre has a MIT license, as found in the [LICENSE](LICENSE) file.
