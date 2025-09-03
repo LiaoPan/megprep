@@ -5,13 +5,6 @@ MEGPrep is a robust and fully automated preprocessing pipeline optimized for lar
 
 [![Documentation Status](https://readthedocs.org/projects/megprep/badge/?version=latest)](https://megprep.readthedocs.io/en/latest/?badge=latest)
 
-[![Documentation Status][rtd-badge]][rtd-link]
-
-[rtd-badge]: https://readthedocs.org/projects/megprep/badge/?version=latest
-[rtd-link]:  https://megprep.readthedocs.io/en/latest/?badge=latest
-
-[![docs](https://img.shields.io/readthedocs/megprep/stable?logo=readthedocs&label=docs)](https://megprep.readthedocs.io/en/stable/)
-
 ## Installation
 For installation and usage instructions for MEGPrep, please see the documentation page: https://megprep.readthedocs.io/en/latest/installation.html
 
