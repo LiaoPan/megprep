@@ -35,14 +35,13 @@ With Docker installed, you can pull the ``megprep:<version>`` image from Docker 
 2. Run the pull command:
 
 ```bash
-
-      docker pull megprep:<version>
+$ docker pull megprep:<version>
 ```
 
 3. Verify the image is downloaded:
 
 ```bash
-      docker images
+$ docker images
 ```
 
    You should see ``megprep`` with tag ``<version>`` in the list.
@@ -54,7 +53,7 @@ With Docker installed, you can pull the ``megprep:<version>`` image from Docker 
 To run the container after pulling:
 
 ```bash
-   docker run megprep:<version> -h
+$ docker run megprep:<version> -h
 ```
 
 For more help, visit https://docs.docker.com/ or the [MegPrep documentation](megprep.readthedocs.io/en/latest/).
