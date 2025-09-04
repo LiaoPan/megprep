@@ -145,7 +145,7 @@ else:
                     pos = ecg_eog_scores['eog_indices'].index(component_idx)
                     current_eog_score = ecg_eog_scores['eog'][pos]
             except Exception as e:
-                st.error(e)
+                print(e)
 
             current_source = source_files[source_group_idx]
             current_source_filename = current_source["filename"]
