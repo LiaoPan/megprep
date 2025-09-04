@@ -1,0 +1,18 @@
+{
+    "ecg":[
+
+    ],
+    "ecg_indices":[
+
+    ],
+    "eog":[
+
+    ],
+    "eog_indices":[
+        0
+    ],
+    "ic_outlier":[
+        0,
+        1
+    ]
+}

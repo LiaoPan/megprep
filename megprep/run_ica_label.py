@@ -44,54 +44,54 @@ def main():
     args = parse_arguments()
 
     # debug
-    args.config = """
-        # detect artifact ICs
-        ic_ecg: true
-        ic_eog: true
-        ic_outlier: true # detect artifact ICs by rules.
+    # args.config = """
+    #     # detect artifact ICs
+    #     ic_ecg: true
+    #     ic_eog: true
+    #     ic_outlier: true # detect artifact ICs by rules.
     
-        find_bads_eog:
-            ch_name: null # or the ch_name of EOG.
-            threshold: auto
-            l_freq: 1
-            h_freq: 10
-            start: null
-            stop: null
-            measure: zscore
+    #     find_bads_eog:
+    #         ch_name: null # or the ch_name of EOG.
+    #         threshold: auto
+    #         l_freq: 1
+    #         h_freq: 10
+    #         start: null
+    #         stop: null
+    #         measure: zscore
     
-        find_bads_ecg:
-            ch_name: null # or the ch_name of ECG.
-            threshold: auto
-            method: ctps
-            l_freq: 8
-            h_freq: 16
-            measure: zscore
+    #     find_bads_ecg:
+    #         ch_name: null # or the ch_name of ECG.
+    #         threshold: auto
+    #         method: ctps
+    #         l_freq: 8
+    #         h_freq: 16
+    #         measure: zscore
     
-        find_bads_muscle:
-            threshold: 0.5
-            start: null
-            stop: null
-            l_freq: 7
-            h_freq: 45
+    #     find_bads_muscle:
+    #         threshold: 0.5
+    #         start: null
+    #         stop: null
+    #         l_freq: 7
+    #         h_freq: 45
     
-        ICA_classify:
-            meg_vendor: neuromag # neuromag or ctf or quanmag_opm or quspin_opm
-            explained_var:
-                threshold: 0.1
-                ch_type: mag
-            find_ecg_ics:
-                time_segment: 10 # seconds
-                ts_ecg_num_max: 20 # Maximum number of heartbeats expected in the chosen time segment
-                l_freq: 0.1
-                h_freq: 10
-                peak_threshod_coef: 0.4 #Indicates the threshold of the number of ecg signal peak interval (unit: index). (peak_threshod = 0.4 * fs) | # for 1 seconds
-                peak_std_threshold_coef: 0.05 #Standard deviation threshold of ecg signal peak interval (unit: index). (peak_std_threshold = peak_std_threshold_coef * fs) | # for 1 seconds
-            find_abnormal_psd_ics:
-                attention_low_freq: 0
-                attention_high_freq: 150
-                le_high_freq: 12
-                low_freq_energy_threshold: 0.8 # Threshold above which the component is flagged by low-frequency energy ratio
-    """
+    #     ICA_classify:
+    #         meg_vendor: neuromag # neuromag or ctf or quanmag_opm or quspin_opm
+    #         explained_var:
+    #             threshold: 0.1
+    #             ch_type: mag
+    #         find_ecg_ics:
+    #             time_segment: 10 # seconds
+    #             ts_ecg_num_max: 20 # Maximum number of heartbeats expected in the chosen time segment
+    #             l_freq: 0.1
+    #             h_freq: 10
+    #             peak_threshod_coef: 0.4 #Indicates the threshold of the number of ecg signal peak interval (unit: index). (peak_threshod = 0.4 * fs) | # for 1 seconds
+    #             peak_std_threshold_coef: 0.05 #Standard deviation threshold of ecg signal peak interval (unit: index). (peak_std_threshold = peak_std_threshold_coef * fs) | # for 1 seconds
+    #         find_abnormal_psd_ics:
+    #             attention_low_freq: 0
+    #             attention_high_freq: 150
+    #             le_high_freq: 12
+    #             low_freq_energy_threshold: 0.8 # Threshold above which the component is flagged by low-frequency energy ratio
+    # """
 
     # Parse YAML configuration
     config = yaml.safe_load(args.config)

@@ -12,7 +12,7 @@ Run MEGPrep
         -v /data/datasets/SMN4Lang/smri:/smri \
         -v /data/megprep/license.txt:/fs_license.txt \
         -v /data/nextflow.config:/program/nextflow/nextflow.config \
-        megprep:0.0.3 \
+        cmrlab/megprep:0.0.3 \
         -i /input \
         -o /output \
         --fs_license_file /license.txt \
@@ -43,7 +43,7 @@ In this command:
 + ``-v /data/nextflow.config:/program/nextflow/nextflow.config``
    This mounts the Nextflow configuration file so the program inside the container can use it.  
 
-+ ``megprep:0.0.3``  
++ ``cmrlab/megprep:0.0.3``  
     This specifies the Docker image and version to run, where `megprep` is the image name, and `0.0.3` is the version.  
 
 + ``-i /input``  
