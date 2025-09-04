@@ -4,6 +4,7 @@
 *.nii
 *.h5
 *.mat
+*.tar.gz
 nextflow/.nextflow/
 nextflow/_misc/
 megprep/reports/temp/
@@ -11,6 +12,11 @@ report.sh
 main*.sh
 nextflow/nextflow_for_*.config
 softwares/
+softwares/freesurfer/
+softwares/debug_call_docker.sh
+softwares/license.txt
+softwares/run_deep.sh
+softwares/tktools
 .nextflow/
 .venv/
 megprep/temp/
