@@ -70,7 +70,7 @@ In the nextflow.config file, you can configure various pipeline parameters to cu
         conductivity:
             - 0.3
     """
-// MEG Preprocessing Parameters
+    // MEG Preprocessing Parameters
     osl_random_seed = 2025
     preproc_config = """
         preproc:
