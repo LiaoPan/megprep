@@ -28,14 +28,14 @@ For installation and usage instructions for MEGPrep, please see the documentatio
 
 #### Pulling the MegPrep Image
 
-With Docker installed, you can pull the ``megprep:<version>`` image from Docker Hub.
+With Docker installed, you can pull the ``cmrlab/megprep:<version>`` image from Docker Hub.
 
 1. Open a terminal (or Command Prompt/PowerShell on Windows).
 
 2. Run the pull command:
 
 ```bash
-$ docker pull megprep:<version>
+$ docker pull cmrlab/megprep:<version>
 ```
 
 3. Verify the image is downloaded:
@@ -44,7 +44,7 @@ $ docker pull megprep:<version>
 $ docker images
 ```
 
-   You should see ``megprep`` with tag ``<version>`` in the list.
+   You should see ``cmrlab/megprep`` with tag ``<version>`` in the list.
 
 ---------------------
 
@@ -53,7 +53,7 @@ $ docker images
 To run the container after pulling:
 
 ```bash
-$ docker run megprep:<version> -h
+$ docker run cmrlab/megprep:<version> -h
 ```
 
 For more help, visit https://docs.docker.com/ or the [MEGPrep documentation](megprep.readthedocs.io/en/latest/).
@@ -80,7 +80,7 @@ docker run -it --rm \
 -v "$(pwd)/<your_bids_dataset>/smri":/smri \
 -v /<your_freesurfer>/license.txt:/fs_license.txt \
 -v "$(pwd)/nextflow_for_anat.config":/program/nextflow/nextflow.config \
-megprep:<version> \
+cmrlab/megprep:<version> \
 -i /input \
 -o /output \
 --fs_license_file /license.txt \
@@ -97,7 +97,7 @@ docker run -it --rm \
 -v "$(pwd)/<your_bids_dataset>/smri":/smri \
 -v /<your_freesurfer>/license.txt:/fs_license.txt \
 -v "$(pwd)/nextflow_for_cog.config":/program/nextflow/nextflow.config \
-megprep:<version> \
+cmrlab/megprep:<version> \
 -i /input \
 -o /output \
 --fs_license_file /license.txt \
@@ -110,7 +110,7 @@ docker run -it -d --rm \
 -p 8501:8501 \
 -v "$(pwd)/cog_dataset/derivatives":/output \
 -v "$(pwd)/cog_dataset/smri":/smri \
-megprep:<version> -r
+cmrlab/megprep:<version> -r
 ```
 
 
