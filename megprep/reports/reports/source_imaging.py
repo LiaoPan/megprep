@@ -50,24 +50,23 @@ else:
 
 selected_dir = st.sidebar.selectbox("Select a MEG File:", image_dirs)
 
-selected_ori = st.sidebar.radio("Select Brain Hemisphere:", ["Left Hemisphere (lh)", "Right Hemisphere (rh)"])
 
-ori_suffix = "lh" if "Left" in selected_ori else "rh"
-
-if selected_dir:
-    source_imaging = Path(source_report_dir) / selected_dir / f"wdonset_evoked_dSPM-ico4-{ori_suffix}.png"
-
-    if source_imaging.exists():
-        st.image(source_imaging, use_container_width=True)
-    else:
-        st.warning(f"Image not found: {source_imaging}")
+# Streamlit sidebar selectbox for subject
+# --- subject options ---
+# List all available subjects (folders) in SUBJECTS_DIR
+if subjects_dir and os.path.exists(subjects_dir):
+    subject_choices = sorted(
+        [d for d in os.listdir(subjects_dir) if os.path.isdir(os.path.join(subjects_dir, d))]
+    )
 else:
-    st.info("Please select a MEG File.")
+    st.warning("SUBJECTS_DIR not found or does not exist!")
+    subject_choices = []
+subject = st.sidebar.selectbox("Select subject for surface visualization", subject_choices)
+
 
 
 ## --- STC Source Estimate Visualization ---
 st.subheader("Interactive Source Estimate (STC) Display")
-st.sidebar.markdown("---")
 
 stc_dir = Path(source_report_dir) / selected_dir if selected_dir else None
 if stc_dir and stc_dir.exists():
@@ -82,20 +81,38 @@ else:
     prefixes = []
 
 if prefixes:
-    selected_prefix = st.sidebar.selectbox("Select STC file prefix (auto matches lh/rh)", prefixes)
-    stc_path = stc_dir / f"{selected_prefix}-{ori_suffix}.stc"
+    selected_prefix = st.sidebar.selectbox("Select STC file prefix", prefixes)
+    stc_path = stc_dir / f"{selected_prefix}-lh.stc" #-{selected_ori_hemi} # (auto matches lh/rh)
+
+    selected_ori = st.sidebar.radio("Select Brain Hemisphere:",
+                                    ["Left Hemisphere", "Right Hemisphere", "Whole Brain"])
+
+    if "Left" in selected_ori:
+        selected_ori_hemi = "lh"
+    elif "Right" in selected_ori:
+        selected_ori_hemi = "rh"
+    else:
+        selected_ori_hemi = "split"
+
 
     # Load and display the STC, with interactive visualization controls
     if stc_path.exists():
         st.info(f"Source Estimate – {selected_prefix}")
-        stc = mne.read_source_estimate(str(stc_path))
-
-        selected_ori_hemi = st.sidebar.radio("Brain Hemisphere:", ["lh", "rh","split"])
-
+        stc = mne.read_source_estimate(str(stc_path),subject=subject)
 
         # --- Time slider ---
         time_min, time_max = stc.times[0], stc.times[-1]
-        default_time = (time_min + time_max) / 2
+
+        # Get the peak vertex and time for the current hemisphere
+        if selected_ori_hemi == "split":
+            peak_hemi = None
+        else:
+            peak_hemi = selected_ori_hemi
+        vertno_max, peak_vertex_time = stc.get_peak(hemi=peak_hemi)
+
+        print("vertno_max, peak_vertex_time:",vertno_max, peak_vertex_time)
+        default_time = peak_vertex_time
+
         time = st.sidebar.slider(
             "Display Time Point (s)", float(time_min), float(time_max),
             value=float(default_time), step=0.01, format="%.3f"
@@ -108,8 +125,9 @@ if prefixes:
 
         # --- CLIM and display options ---
         background_color = st.sidebar.selectbox("Background",["white","black"])
-        clim_kind = st.sidebar.selectbox("clim kind", ["percent", "value"], index=0)
-        pos_lims_input = st.sidebar.text_input("clim pos_lims (comma-separated)", value="0, 97.5, 100")
+        clim_kind = st.sidebar.selectbox("Clim kind", ["percent", "value"], index=0)
+        pos_lims_input = st.sidebar.text_input("Clim pos_lims (comma-separated)", value="0, 97.5, 100")
+        smoothing_steps = st.sidebar.slider("Smoothing steps", min_value=0, max_value=20,value=10)
         try:
             pos_lims = [float(x.strip()) for x in pos_lims_input.split(",")][:3]
             if len(pos_lims) != 3:
@@ -118,28 +136,15 @@ if prefixes:
             st.error("clim pos_lims must be three comma-separated numbers!")
             st.stop()
 
+        alpha = st.sidebar.slider("Alpha", 0, 1,value=1,format="%.2f")
+        time_viewer = st.sidebar.checkbox("Time_viewer (display time viewer)", True)
+        show_traces = time_viewer
 
-        time_viewer = st.sidebar.checkbox("time_viewer (interactive timebar)", True)
-        show_traces = st.sidebar.checkbox("show_traces (plot time series below)", True)
         if selected_ori_hemi == 'split':
-            size = (1200, 500)
+            size = (1250, 500)
         else:
             size = (1000, 800)
-        time_label = st.sidebar.text_input("Time label (time_label)", "Time (s)")
-
-        # --- subject options ---
-        # List all available subjects (folders) in SUBJECTS_DIR
-        if subjects_dir and os.path.exists(subjects_dir):
-            subject_choices = sorted(
-                [d for d in os.listdir(subjects_dir) if os.path.isdir(os.path.join(subjects_dir, d))]
-            )
-        else:
-            st.warning("SUBJECTS_DIR not found or does not exist!")
-            subject_choices = []
-
-        # Streamlit sidebar selectbox for subject
-        subject = st.sidebar.selectbox("Select subject for surface visualization", subject_choices)
-
+        time_label = f"Peak Time ({time:.3f}s)"
         surfer_kwargs = dict(
             subject=subject,
             hemi=selected_ori_hemi,
@@ -149,12 +154,12 @@ if prefixes:
             initial_time=time,
             time_unit='s',
             time_label=time_label,
-            alpha=1,
+            alpha=alpha,
             time_viewer=time_viewer,
             show_traces=show_traces,
             size=size,
             background=background_color,
-            smoothing_steps=10,
+            smoothing_steps=smoothing_steps,
             brain_kwargs=dict(block=False, show=False),
             verbose=True
         )
@@ -163,11 +168,25 @@ if prefixes:
             st.write(f"```{surfer_kwargs}```")
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpimg = os.path.join(tmpdir, f"brain_{selected_prefix}_{ori_suffix}_{time:.3f}.png")
+            tmpimg = os.path.join(tmpdir, f"brain_{selected_prefix}_{selected_ori_hemi}_{time:.3f}.png")
             brain = stc.plot(**surfer_kwargs)
+
+            # Add the peak activation location as a blue foci on the brain
+            if peak_hemi == "split":
+                peak_hemis = ['lh','rh']
+
+            brain.add_foci(
+                vertno_max,
+                coords_as_verts=True,
+                hemi=peak_hemi,
+                color="black",
+                scale_factor=1,
+                alpha=1,
+            )
+            print("debug:tmpimg,",tmpimg)
             brain.save_image(tmpimg)
             brain.close()
-            st.image(tmpimg, caption=f"{selected_prefix}, {ori_suffix}, {time:.3f} s")
+            st.image(tmpimg, caption=f"{selected_prefix}, {selected_ori_hemi}, {time:.3f} s")
     else:
         st.warning(f"STC file not found: {stc_path}")
 else:

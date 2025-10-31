@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import timedelta
 mne.viz.set_browser_backend('matplotlib')
 
+
 # set report root dir.
 if in_docker():
     report_root_dir = "/output"
@@ -77,7 +78,7 @@ else:
         freqrange = st.sidebar.slider('Band-pass frequency range (Hz)', min_value=0, max_value=300,
                                       value=(1, 40))
 
-        time_duration = st.sidebar.selectbox('Duration (s)', [10, 20, 30, 60])
+        time_duration = st.sidebar.selectbox('Duration (s)', [10, 20, 30, 60], index=2)
 
         channel_range = st.sidebar.selectbox('Channels', [10, 20, 30, 60, len(origin_raw.ch_names)])
 
@@ -86,7 +87,7 @@ else:
         # timerange = st.sidebar.slider('Time (s)', min_value=0.0, max_value=(last_time-first_time-time_duration),
         #                               value=(0.0,))
         st.sidebar.info(f"Raw | First time: {first_time}, last time: {last_time}")
-        start_time = st.sidebar.number_input(f'Start Time (s) | Time Range: [0, {(last_time-first_time-time_duration):.3f}]',
+        start_time = st.sidebar.number_input(f'Starting Time (s) | Time Range: [0, {(last_time-first_time-time_duration):.3f}]',
                                              min_value=0., max_value=(last_time-first_time-time_duration))
 
         # 初始化当前通道的起始索引（使用Session State 来保持按钮点击后的状态）
@@ -94,7 +95,7 @@ else:
             st.session_state.start_channel = 12
 
         # 滑块：选择起始通道索引
-        start_channel = st.sidebar.slider('Start Channel Index', min_value=0,
+        start_channel = st.sidebar.slider('Starting Channel Index', min_value=0,
                                           max_value=len(origin_raw.ch_names) - channel_range,
                                           value=st.session_state.start_channel, step=1)
 
@@ -117,7 +118,6 @@ else:
                 if st.session_state.start_channel + channel_range < len(origin_raw.ch_names):
                     st.session_state.start_channel += channel_range  # 向后翻页，增加channel_range
 
-        rerun_flag = st.sidebar.checkbox("Auto Rerun")
 
         selected_channels = origin_raw.ch_names[st.session_state.start_channel:st.session_state.start_channel + channel_range]
 
@@ -177,7 +177,11 @@ else:
         # 显示当前坏段的 onset 时间
         print("bad_segments::",bad_segments)
         if bad_segments:
-
+            st.sidebar.markdown(
+                "<hr style='margin-top: 0.5rem; margin-bottom: 0.5rem;'>",
+                unsafe_allow_html=True
+            )
+            st.sidebar.markdown("Artifact View")
             col1, col2 = st.sidebar.columns(2)
             with col1:
                 if st.button('PrevBadSeg'):
@@ -234,20 +238,21 @@ else:
                 raw.info["bads"] = bad_channels
                 # st.write("Bad channels:", raw.info["bads"])
                 bad_ch_df = st.data_editor(pd.DataFrame(raw.info['bads'], columns=['Bad channels']), num_rows="dynamic")
-
+                bad_ch_df.dropna(inplace=True)
             with col2:
                 # st.subheader("Bad Segments")
                 st.write("##### Bad Segments")
                 # example：raw.annotations.append(onset=10, duration=5, description="Bad segment")
                 bad_segments = raw.annotations
                 bad_seg_df = st.data_editor(bad_segments.to_data_frame(time_format=None), num_rows="dynamic")
+                bad_seg_df.dropna(inplace=True)
                 bad_seg_anat = mne.Annotations(onset=bad_seg_df['onset'].tolist(),
                                                duration=bad_seg_df['duration'].tolist(),
                                                description=bad_seg_df['description'].tolist(),
                                                orig_time=origin_raw.annotations.orig_time)
                 st.info(f"onset=Waveform_times + {raw.first_time}")
-            save_changes = st.form_submit_button("Save Annotations")
-
+            st.info("💡 Tip: Click elsewhere after editing to ensure changes are captured")
+            save_changes = st.form_submit_button("Save Annotations",use_container_width=True)
             if save_changes:
                 st.session_state.save_triggered_s = True
                 st.session_state.save_triggered_c = True
@@ -269,8 +274,11 @@ else:
                 origin_raw.info['bads'] = bad_channels_list
                 origin_raw.save(file_path, overwrite=True)
                 st.success(f"Overwriting:{file_path}")
-                if rerun_flag:
-                    st.rerun()
+
+                # reset bad seg/channel index view.
+                st.session_state.current_bad_index = 0
+
+                st.rerun()
             else:
                 st.session_state.save_triggered_s = False
                 st.session_state.save_triggered_c = False
@@ -281,4 +289,3 @@ else:
             st.info("Save operation completed.")
         else:
             st.info("No save operation performed.")
-

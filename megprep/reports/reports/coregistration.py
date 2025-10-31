@@ -4,8 +4,8 @@
 
 import os
 import glob
+import time
 import numpy as np
-import pandas as pd
 import nibabel as nib
 import streamlit as st
 from stpyvista import stpyvista
@@ -290,7 +290,6 @@ def rotation_matrix(axis, angle):
 st.title("Coregistration")
 
 # Sidebar for user inputs
-st.sidebar.header("Configuration")
 
 if in_docker():
     report_root_dir = Path("/output")
@@ -316,7 +315,7 @@ default_trans_dir = report_root_dir / "preprocessed" / "trans"
 
 
 subjects_dir = st.sidebar.text_input("Freesurfer SUBJECTS_DIR", default_subjects_dir)
-opacity = st.sidebar.slider("Opacity", min_value=0.0, max_value=1.0, value=0.95, step=0.1)
+opacity = st.sidebar.slider("Opacity", min_value=0.0, max_value=1.0, value=1.0, step=0.1)
 
 # Get available subjects
 if os.path.exists(subjects_dir):
@@ -380,97 +379,21 @@ print("coreg_trans matrix:",coreg_trans['trans'])
 
 st.sidebar.markdown("---")
 
-# Fit ICP
-st.sidebar.header("Settings")
-with st.sidebar.form(key='coreg-settings'):
-    st.subheader("MNE ICP Iteration Parameters")
-    n_iterations = int(st.text_input("Number of Iterations", value="20"))
-    lpa_weight = float(st.text_input("LPA Weight", value="1.0"))
-    nasion_weight = float(st.text_input("Nasion Weight", value="10.0"))
-    rpa_weight = float(st.text_input("RPA Weight", value="1.0"))
-    hsp_weight = float(st.text_input("HSP Weight", value="10.0"))
-    eeg_weight = float(st.text_input("EEG Weight", value="0.0"))
-    hpi_weight = float(st.text_input("HPI Weight", value="1.0"))
-
-    grow_hair = float(st.text_input("Grow Hair", value="0.0"))
-    omit_head_shape_points =  float(st.text_input("Omit Head Shape Points", value="5.0"))
-
-    # Create a dictionary with the parameters
-    data = {
-        "Parameter": [
-            "Number of Iterations",
-            "LPA Weight",
-            "Nasion Weight",
-            "RPA Weight",
-            "HSP Weight",
-            "EEG Weight",
-            "HPI Weight",
-            "Grow Hair",
-            "Omit Head Shape Points"
-        ],
-        "Value": [
-            n_iterations,
-            lpa_weight,
-            nasion_weight,
-            rpa_weight,
-            hsp_weight,
-            eeg_weight,
-            hpi_weight,
-            grow_hair,
-            omit_head_shape_points
-        ]
-    }
-
-    # Create a DataFrame
-    config_df = pd.DataFrame(data)
-
-    col1, col2, col3 = st.columns([1, 2, 1]) # center
-    with col2:
-        submitted_config_icp = st.form_submit_button("FitICP") #[MNE]
-
-
-with st.sidebar.form(key="tran-ro-config"):
-    # st.markdown("---")
-    st.subheader("Translation & Rotation")
-
-    translation_x = st.slider("Translation X-axis", -5.0, 5.0, 1.0)  # Translation along X-axis
-    translation_y = st.slider("Translation Y-axis", -5.0, 5.0, 0.0)  # Translation along Y-axis
-    translation_z = st.slider("Translation Z-axis", -5.0, 5.0, 0.0)  # Translation along Z-axis
-
-    rotation_x = st.slider("Rotation around X-axis (°)", 0, 360, 0)  # Rotation around X-axis
-    rotation_y = st.slider("Rotation around Y-axis (°)", 0, 360, 0)  # Rotation around Y-axis
-    rotation_z = st.slider("Rotation around Z-axis (°)", 0, 360, 0)  # Rotation around Z-axis
-
-    col1, col2, col3 = st.columns([1, 2, 1]) # center
-    with col2:
-        submitted_config_trano = st.form_submit_button("Apply")
-
-
 print("Selected MEG:", selected_meg_file)
 print("Selected Subject:", selected_subject)
 print("Selected Transform:", selected_trans_file)
 
-
 plotter = pv.Plotter(window_size=[800, 600])
-
-if st.session_state.get('transform_changed_flag',False):
-    coreg_trans_matrix = st.session_state.coreg.trans
-    print("go cache....",coreg_trans_matrix)
-else:
-    coreg_trans_matrix = coreg_trans
-    print("go init...",coreg_trans)
-
 plotter = visualize_head_surface(subject=selected_subject,
                                subjects_dir=subjects_dir,
-                               trans=coreg_trans_matrix,
+                               trans=coreg_trans,
                                raw=raw,
                                t1_mgh=t1_mgh,
                                opacity=opacity)
 
-
 plotter = visualize_nasion_and_scalp(plotter=plotter,subject=selected_subject,
                            subjects_dir=subjects_dir,
-                           trans=coreg_trans_matrix,
+                           trans=coreg_trans,
                            raw=raw,
                            t1_mgh=t1_mgh)
 
@@ -481,98 +404,11 @@ plotter.view_isometric()
 plotter.add_axes_at_origin()
 # plotter.show(auto_close=True)
 # plotter.update()
-stpyvista(plotter, key="coregistration", panel_kwargs=dict(interactive_orientation_widget=False,orientation_widget=True))
-
-if submitted_config_icp:
-    fiducials = 'estimated'
-    coreg = Coregistration(info=raw.info,
-                           subject=selected_subject,
-                           subjects_dir=subjects_dir,
-                           fiducials=fiducials)
-
-    coreg.set_grow_hair(grow_hair)
-    coreg.omit_head_shape_points(distance=(omit_head_shape_points / 1000))
-
-    icp_parameters = {
-        "n_iterations": n_iterations,
-        "lpa_weight": lpa_weight,
-        "nasion_weight": nasion_weight,
-        "rpa_weight": rpa_weight,
-        "hsp_weight": hsp_weight,
-        "eeg_weight": eeg_weight,
-        "hpi_weight": hpi_weight
-    }
-    coreg.fit_icp(**icp_parameters)
-
-    st.write("Coreg Transform (after ICP):")
-    st.write(coreg.trans)
-
-    # Compute distances between HSP and MRI
-    dists = coreg.compute_dig_mri_distances() * 1e3  # Convert to mm
-    st.write(f"Distances between HSP and MRI(mean): {np.mean(dists):.3f} mm")
-
-    st.session_state.coreg = coreg
-    st.session_state.transform_changed_flag = True
-
-if submitted_config_trano:
-    print("go translate....")
-    # Define translation offset and rotation angle
-    translation = np.array([translation_x, translation_y, translation_z])
-
-    # 计算旋转矩阵
-    rot_x = rotation_matrix('x', rotation_x)
-    rot_y = rotation_matrix('y', rotation_y)
-    rot_z = rotation_matrix('z', rotation_z)
-
-    # 组合旋转矩阵（ZYX顺序）
-    combined_rotation_matrix = rot_z @ rot_y @ rot_x
-
-    # 创建齐次变换矩阵（4x4）
-    homogeneous_transform = np.eye(4)
-    homogeneous_transform[:3, :3] = combined_rotation_matrix  # 设置旋转部分
-    homogeneous_transform[:3, 3] = translation  # 设置平移部分
-
-    # trans = mne.Transform('head', 'mri', homogeneous_transform) ##_head_mri_t
-
-    if st.session_state.get('coreg',None) is not None:
-        print("go here T 1")
-        st.session_state.coreg._head_mri_t = homogeneous_transform
-    else:
-        coreg = Coregistration(info=raw.info,
-                               subject=selected_subject,
-                               subjects_dir=subjects_dir,
-                               fiducials='estimated')
-        print("homogeneous_transform:",homogeneous_transform)
-        coreg._head_mri_t = homogeneous_transform
-        st.session_state.coreg = coreg
-
-    st.session_state.transform_changed_flag = True
-    print("Translation&Rotation Done!")
-
-
-# Display the header
-st.write("### Configured Parameters:")
-
-# Display the DataFrame as a table
-st.dataframe(config_df, use_container_width=True,hide_index=True)
-
+stpyvista(plotter, key=f"coregistration_{time.time()}", panel_kwargs=dict(interactive_orientation_widget=False,orientation_widget=True))
 
 # 显示齐次变换矩阵
-st.write("Coregistration Transform (4x4):")
-if st.session_state.get('coreg',None) is not None:
-    print("go cache2....")
-    st.write(st.session_state.coreg.trans['trans'])
-else:
-    st.write(coreg_trans_matrix)
-    print("go init2....")
-
-# save transform matrix
-if st.button("Save Transform Matrix", key="save_button"):
-    transform_matrix = st.session_state.coreg.trans['trans']
-    trans = mne.Transform('head', 'mri', transform_matrix)
-    # mne.write_trans(selected_trans_file, trans, overwrite=True)
-    mne.write_trans("demo-trans.fif", trans, overwrite=True)
-    st.success(f"Transform matrix saved!")
+st.write("### Coregistration Transform (4x4):")
+st.table(coreg_trans['trans'])
 
 
 
