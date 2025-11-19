@@ -13,7 +13,7 @@ from sleepecg import detect_heartbeats
 from scipy.stats import linregress
 from collections import defaultdict
 
-from .brain_mapping import CHAN_MAPPING, BRAIN_MAPPING
+from .brain_mapping import get_chan_mapping,get_brain_mapping
 
 
 # ecg related
@@ -378,10 +378,8 @@ def find_ecg_ics(ica_sources_raw,time_start=0, time_segment=10, time_segment_rat
                     print(f"     diff_peak std({diff_peak_std}) <= peak_std_threshold({peak_std_threshold}): {diff_peak_std <= peak_std_threshold}")
                 if diff_peak_corr_std <= peak_std_threshold or diff_peak_std <= peak_std_threshold:
                     is_periodic = True
-                print("Judge periodic:", is_periodic)
         else:
             is_periodic = False
-            print("Set is_periodic:", is_periodic)
 
 
         if savefig:
@@ -435,12 +433,8 @@ def find_ecg_ics(ica_sources_raw,time_start=0, time_segment=10, time_segment_rat
 
 
 # topomap related
-def ics_topomap_distribution(ica_fit_file, ica_sources_raw, ic_nums_list=[], meg_vendor='', savefig=False, savefig_path='.',
+def ics_topomap_distribution(ica_fit_file, ica_sources_raw, ic_nums_list=[], savefig=False, savefig_path='.',
                              verbose=False):
-    print("meg_vendor:",meg_vendor)
-    if meg_vendor == '':
-        raise ValueError(f'meg_vendor is required: {meg_vendor}')
-
     # Get the ICA topomap data for the specified component
     ica = mne.preprocessing.read_ica(ica_fit_file)
     topomap_ic = ica.get_components()
@@ -453,25 +447,11 @@ def ics_topomap_distribution(ica_fit_file, ica_sources_raw, ic_nums_list=[], meg
     if not ic_nums_list:
         ic_nums_list = list(range(0, ic_nums))
 
-    chan_mapping = {}
-    for channel in ica.ch_names:
-        chan_mapping[channel] = ica.ch_names.index(channel)
-    CHAN_MAPPING[meg_vendor] = chan_mapping
+    chan_mapping = get_chan_mapping(ica.info)
 
     for component_idx in ic_nums_list:
-        regions = BRAIN_MAPPING[meg_vendor]
-        all_channels = CHAN_MAPPING[meg_vendor].keys()
-        # for example
-        # 'MLT26-4408' or 'MLT26-2622'
-        if meg_vendor  == 'ctf':
-            channel_id = ica.ch_names[0].split('-')[1]
-            for region in regions:
-                regions[region] = [channel.replace('4408', channel_id) for channel in regions[region]]
-
-            all_channels = [item.replace('4408', channel_id) for item in all_channels]
-
-            CHAN_MAPPING[meg_vendor] = {key.replace('4408', channel_id): value for key, value in CHAN_MAPPING[meg_vendor].items()}
-
+        regions = get_brain_mapping(ica.info)
+        all_channels = chan_mapping.keys()
         data = topomap_ic[:, component_idx]
 
         # Calculate energy for all channels (not just the selected regions)
@@ -482,9 +462,9 @@ def ics_topomap_distribution(ica_fit_file, ica_sources_raw, ic_nums_list=[], meg
 
         for region, electrodes in regions.items():
             # 找到每个脑区对应的电极在数据中的索引
-            region_indices = [CHAN_MAPPING[meg_vendor][electrode]
+            region_indices = [chan_mapping[electrode]
                               for electrode in electrodes
-                              if electrode in CHAN_MAPPING[meg_vendor]]
+                              if electrode in chan_mapping]
             region_energy = np.sum(total_energy[region_indices])  # 计算该脑区的总能量
             region_energies[region] = region_energy
 
@@ -505,7 +485,7 @@ def ics_topomap_distribution(ica_fit_file, ica_sources_raw, ic_nums_list=[], meg
                               chan not in [electrode for region in regions.values() for electrode in region]]
 
         # Get the indices for the remaining channels
-        remaining_channel_indices = [CHAN_MAPPING[meg_vendor][chan] for chan in remaining_channels if chan in CHAN_MAPPING[meg_vendor]]
+        remaining_channel_indices = [chan_mapping[chan] for chan in remaining_channels if chan in chan_mapping]
 
         # Calculate the energy for the remaining channels
         remaining_channel_energy = np.sum(total_energy[remaining_channel_indices])
@@ -948,7 +928,7 @@ def classify_ics(ica_source_file,ica_fit_file,explained_var_file,config):
                            verbose=False)
 
     print("[IC_classify | First screening]ECG list:", ecg_ics)
-    brain_areas_dict = ics_topomap_distribution(ica_fit_file, ica_sources_raw.copy(), ecg_ics, meg_vendor=meg_vendor)
+    brain_areas_dict = ics_topomap_distribution(ica_fit_file, ica_sources_raw.copy(), ecg_ics)
 
     for _ic_num in ecg_ics:
         # case 1：颞枕叶脑区能量应大于其余脑区
@@ -1007,24 +987,40 @@ def classify_ics(ica_source_file,ica_fit_file,explained_var_file,config):
     exclude_ics_dict['ic_outlier'].extend(abnormal_psd_ics)
 
     # EOG # 双侧额颞能量高、且psd小于10Hz高占比
-    brain_areas_dict = ics_topomap_distribution(ica_fit_file, ica_sources_raw.copy(), lowfreqHz_ics, meg_vendor=meg_vendor)
-    # print("brain_areas_dict(low freq&EOG):",brain_areas_dict)
-    eog_ics = []
-    for ic_num in lowfreqHz_ics:
-        _eog_power = 0
-        other_power = 0
-        for brain_name in ['Left-frontal', 'Right-frontal', 'Left-temporal', 'Right-temporal']:
-            _eog_power += brain_areas_dict[ic_num][brain_name]
-        for brain_name in ['Left-occipital', 'Right-occipital', 'Remaining']:
-            other_power += brain_areas_dict[ic_num][brain_name]
-        if _eog_power > other_power:
-            print(f"[IC_classify]EOG ICs:{ic_num}")
-            exclude_ics.append(ic_num)
-            eog_ics.append(ic_num)
-    exclude_ics_dict['ic_eog'].extend(eog_ics)
+    try:
+        brain_areas_dict = ics_topomap_distribution(ica_fit_file, ica_sources_raw.copy(), lowfreqHz_ics)
+        # print("brain_areas_dict(low freq&EOG):",brain_areas_dict)
+        eog_ics = []
+        for ic_num in lowfreqHz_ics:
+            _eog_power = 0
+            other_power = 0
+            for brain_name in ['Left-frontal', 'Right-frontal', 'Left-temporal', 'Right-temporal']:
+                _eog_power += brain_areas_dict[ic_num][brain_name]
+            for brain_name in ['Left-occipital', 'Right-occipital', 'Remaining']:
+                other_power += brain_areas_dict[ic_num][brain_name]
+            if _eog_power > other_power:
+                print(f"[IC_classify]EOG ICs:{ic_num}")
+                exclude_ics.append(ic_num)
+                eog_ics.append(ic_num)
+        exclude_ics_dict['ic_eog'].extend(eog_ics)
 
-    exclude_ics_dict['ic_outlier'] = sorted(list(set(exclude_ics_dict['ic_outlier'])))
-    exclude_ics = sorted(list(set(exclude_ics)))
+        exclude_ics_dict['ic_outlier'] = sorted(list(set(exclude_ics_dict['ic_outlier'])))
+        exclude_ics = sorted(list(set(exclude_ics)))
+    except Exception as e:
+        print("ICs_topomap_distribution error:", e)
+
+    # Newly: TopoMap Template Similarity of ECG&EOG.
+    try:
+        from .ICs_template_similarity import find_ecg_eog_ics
+        ecg_eog_dict = find_ecg_eog_ics(ica_fit_file, device_type=meg_vendor)
+        print("ECG&EOG Template Similarity Exclude ICs:", ecg_eog_dict)
+        exclude_ics_dict["ic_eog"].extend(ecg_eog_dict["ic_eog"])
+        exclude_ics_dict["ic_ecg"].extend(ecg_eog_dict["ic_ecg"])
+        exclude_ics_dict["ic_eog"] = list(set(exclude_ics_dict["ic_eog"]))
+        exclude_ics_dict["ic_ecg"] = list(set(exclude_ics_dict["ic_ecg"]))
+    except Exception as e:
+        print("TemplateSimilarity Error:", e)
+
     print("[IC_classify]Final Exclude ICs:", exclude_ics_dict)
     return exclude_ics,exclude_ics_dict
 

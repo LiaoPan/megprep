@@ -1,6 +1,7 @@
 # coding:utf-8
 # 映射不同脑磁设备下，不同脑区对应的通道。
 import mne
+from mne.channels.channels import _divide_to_regions
 
 # User Define
 BRAIN_MAPPING = {
@@ -55,21 +56,6 @@ BRAIN_MAPPING = {
             'Right-occipital': [ 'MRO11-4408', 'MRO12-4408', 'MRO13-4408', 'MRO14-4408', 'MRO21-4408', 'MRO22-4408', 'MRO23-4408', 'MRO24-4408', 'MRO31-4408', 'MRO32-4408', 'MRO33-4408', 'MRO34-4408', 'MRO41-4408', 'MRO42-4408', 'MRO43-4408', 'MRO44-4408', 'MRO51-4408', 'MRO52-4408', 'MRO53-4408'],
             'Left-occipital': ['MLO11-4408', 'MLO12-4408', 'MLO13-4408', 'MLO14-4408', 'MLO21-4408', 'MLO22-4408', 'MLO23-4408', 'MLO24-4408', 'MLO31-4408', 'MLO32-4408', 'MLO33-4408', 'MLO34-4408', 'MLO41-4408', 'MLO42-4408', 'MLO43-4408', 'MLO44-4408', 'MLO51-4408', 'MLO52-4408', 'MLO53-4408']
         },
-    "quanmag_opm": {
-        'Left-frontal': [],
-        'Right-frontal': [],
-        'Left-temporal': [],
-        'Right-temporal': []
-    },
-    "quspin_opm": {
-        'Left-frontal': [],
-        'Right-frontal': [],
-        'Left-temporal': [],
-        'Right-temporal': []
-    },
-    # all 4D-BTi MEG channels start with "A"
-    # all 4D-BTi reference channels start with M or G
-    "bti": {}
 }
 
 CHAN_MAPPING = {
@@ -174,6 +160,27 @@ CHAN_MAPPING = {
 }
 
 
+def get_brain_mapping(raw_info):
+    """Generate brain mapping based on raw information."""
+    # Divide the channels into regions
+    idx = _divide_to_regions(raw_info)
+
+    # Create the BRAIN_MAPPING dictionary
+    brain_mapping = {}
+    for region, channel_indices in idx.items():
+        # Get the actual channel names
+        channel_names = [raw_info.ch_names[i] for i in channel_indices if i < len(raw_info.ch_names)]
+        brain_mapping[region] = channel_names
+
+    return brain_mapping
+
+
+def get_chan_mapping(raw_info):
+    """Generate channel mapping based on raw information."""
+    # Create the CHAN_MAPPING dictionary
+    chan_mapping = {name: idx for idx, name in enumerate(raw_info.ch_names)}
+    return chan_mapping
+
 def create_channel_index_mapping():
     chan_mapping = {}
     raw_file = "/data/liaopan/deep_decoding/MEG-to-Speech/datasets/ChineseSentences/raw/sub-01/ses-01_tsss.fif" #neuromag
@@ -270,4 +277,18 @@ if __name__ == "__main__":
 
     # print(get_selection('Left-frontal'))
     # print(get_brain_name(ch_name='MEG111',device='neuromag'))
-    print(create_channel_index_mapping())
+    # print(create_channel_index_mapping())
+
+    raw = mne.preprocessing.read_ica("/data/liaopan/megprep_demo/wand_dataset/derivatives/preprocessed/ica_report/sub-00395_ses-01_task-visual/sub-00395_ses-01_task-visual_preproc-raw_ica.fif")
+
+    # Get BRAIN_MAPPING and CHAN_MAPPING
+    brain_mapping = get_brain_mapping(raw.info)
+    chan_mapping = get_chan_mapping(raw.info)
+
+    print("raw.info:",raw.info)
+
+    # Print the results
+    print("BRAIN_MAPPING:", brain_mapping)
+    print("CHAN_MAPPING:", chan_mapping)
+
+    print(BRAIN_MAPPING['ctf'])
