@@ -8,6 +8,14 @@ def in_docker():
     return os.path.exists('/.dockerenv')
 
 
+def filter_files_by_keyword(files, keyword):
+    """Filter files by keyword (case-insensitive)"""
+    if not keyword or keyword.strip() == "":
+        return files
+    keyword_lower = keyword.strip().lower()
+    return [f for f in files if keyword_lower in f.lower()]
+
+
 def merge_and_deduplicate_annotations(annotations1, annotations2,orig_time):
     """
     Merge two Annotations objects and remove duplicates.
@@ -32,8 +40,8 @@ def merge_and_deduplicate_annotations(annotations1, annotations2,orig_time):
         'description': merged_descriptions
     })
 
-    # Remove duplicates based on the 'description' column
-    data_unique = data.drop_duplicates(subset=['description'])
+    # Remove duplicates based on the 'onset' column
+    data_unique = data.drop_duplicates(subset=['onset'])
 
     # Create a new Annotations object from the deduplicated DataFrame
     cleaned_annotations = mne.Annotations(

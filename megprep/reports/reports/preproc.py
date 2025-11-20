@@ -3,12 +3,71 @@
 import os
 import streamlit as st
 import mne
+import time
 import pandas as pd
-from reports.utils import in_docker,merge_and_deduplicate_annotations
+from reports.utils import in_docker, merge_and_deduplicate_annotations,filter_files_by_keyword
 from pathlib import Path
 from datetime import timedelta
+
 mne.viz.set_browser_backend('matplotlib')
 
+# Custom CSS for better styling
+st.markdown("""
+    <style>
+        /* Main header styling */
+        .main-header {
+            # background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            font-weight: 700;
+            # box-shadow: 0 8px 16px rgba(102, 126, 234, 0.3);
+            margin-bottom: 30px;
+            animation: fadeInDown 0.6s ease-out;
+        }
+    .sub-header {
+        font-size: 1.2rem;
+        color: #666;
+        margin-bottom: 2rem;
+    }
+    .info-box {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
+    .metric-card {
+        background-color: #ffffff;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    /* 统一按钮样式 */
+    .stButton button {
+        font-weight: 500;
+        border-radius: 0.5rem;
+        transition: all 0.3s ease;
+    }
+    .stButton button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+    /* 导航按钮特殊样式 */
+    div[data-testid="column"] .stButton button {
+        height: 2.5rem;
+        font-size: 0.9rem;
+    }
+    /* 保存按钮样式 */
+    .stForm button[kind="primaryFormSubmit"] {
+        height: 3rem !important;
+        font-size: 1rem !important;
+        font-weight: 600 !important;
+        white-space: nowrap !important;
+        padding: 0.5rem 2rem !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # set report root dir.
 if in_docker():
@@ -18,11 +77,8 @@ else:
 
 DATA_DIR = os.path.join(report_root_dir, "preprocessed")
 
-# Streamlit 页面标题
-st.title("MEG Preprocessing Results")
 
-
-# 缓存滤波raw
+# Cache filtered raw
 @st.cache_data
 def filter_data(_raw, freqrange):
     raw_filtered = _raw.copy().filter(*freqrange, n_jobs=8)
@@ -37,255 +93,517 @@ def plot_psd(_raw, freqrange):
     return psd_fig
 
 
-# 检查数据目录是否存在
-if not os.path.exists(DATA_DIR):
-    st.error(f"Data directory '{DATA_DIR}' does not exist. Please create it and add .fif files.")
-    DATA_DIR = st.text_input("Please specify a new data directory:", "")
+def load_bad_segments(bad_segments_file, origin_raw):
+    """Load bad segments from file and return onset list"""
+    bad_segments = []
+    if os.path.exists(bad_segments_file):
+        annotations = mne.read_annotations(bad_segments_file)
+        old_annot = origin_raw.annotations
+        if old_annot != annotations:
+            annotations = merge_and_deduplicate_annotations(
+                annotations,
+                old_annot,
+                orig_time=origin_raw.annotations.orig_time
+            )
+        bad_segments = annotations.onset.tolist()
+    return bad_segments
 
-# 列出目录下的 .fif 文件
-files = sorted([os.path.join(root, f) for root, dirs, _files in os.walk(DATA_DIR) for f in _files if f.endswith("-raw.fif")])
+
+
+
+# Page Title
+st.markdown('<h2 class="main-header">🧠 MEG Preprocessing Results</h2>', unsafe_allow_html=True)
+
+
+# Check if data directory exists
+if not os.path.exists(DATA_DIR):
+    st.error(f"⚠️ Data directory '{DATA_DIR}' does not exist. Please create it and add .fif files.")
+    DATA_DIR = st.text_input("📁 Please specify a new data directory:", "")
+
+# List .fif files in directory
+files = sorted(
+    [os.path.join(root, f) for root, dirs, _files in os.walk(DATA_DIR) for f in _files if f.endswith("-raw.fif")])
 
 if not files:
-    st.warning("No .fif files found in the data directory. Please add some MEG files.")
+    st.warning("⚠️ No .fif files found in the data directory. Please add some MEG files.")
 else:
-    # 文件选择器：允许用户选择一个文件
-    selected_file = st.sidebar.selectbox("Select a MEG File:", files)
+    # ========== SIDEBAR ==========
+    with st.sidebar:
+        # Sidebar styling
+        st.sidebar.markdown("""
+            <div style='text-align: center; padding: 0px;'>
+                <h2 >⚙️ Settings</h2>
+            </div>
+        """, unsafe_allow_html=True)
+        st.header("📁 File Selection")
+        # Custom filter
+        st.markdown('<div class="filter-box">', unsafe_allow_html=True)
 
+        # Initialize filter keyword in session state
+        if 'filter_keyword' not in st.session_state:
+            st.session_state.filter_keyword = ""
+
+        filter_keyword = st.text_input(
+            "🔍 Filter files by keyword:",
+            value=st.session_state.filter_keyword,
+            placeholder="e.g., sub-01, task-rest, run-1, etc.",
+            help="Enter any keyword to filter files (case-insensitive). Leave empty to show all files.",
+            key="filter_input"
+        )
+        st.session_state.filter_keyword = filter_keyword
+
+        # Filter files
+        filtered_files = filter_files_by_keyword(files, filter_keyword)
+
+        selected_file = st.selectbox("Select a MEG File:", filtered_files, label_visibility="collapsed")
+
+        if selected_file:
+            # Cache management
+            if "last_selected_file" not in st.session_state:
+                st.session_state.last_selected_file = selected_file
+            elif st.session_state.last_selected_file != selected_file:
+                st.cache_data.clear()
+                st.session_state.last_selected_file = selected_file
+
+            st.markdown("---")
+
+            # ========== VISUALIZATION SETTINGS ==========
+            st.header("⚙️ Visualization Settings")
+
+            with st.expander("🎚️ Signal Processing", expanded=True):
+                freqrange = st.slider(
+                    'Band-pass Filter (Hz)',
+                    min_value=0,
+                    max_value=300,
+                    value=(1, 40),
+                    help="Filter frequency range for visualization"
+                )
+
+            with st.expander("📊 Display Options", expanded=True):
+                time_duration = st.selectbox(
+                    '⏱️ Duration per View',
+                    [10, 20, 30, 60],
+                    index=2,
+                    help="Time duration to display"
+                )
+
+                channel_range = st.selectbox(
+                    '📡 Channels per View',
+                    [10, 20, 30, 60],
+                    help="Number of channels to display"
+                )
+
+            st.markdown("---")
+
+            # ========== NAVIGATION ==========
+            st.header("🧭 Navigation")
+
+            # Load raw data info first
+            file_path = os.path.join(DATA_DIR, selected_file)
+            origin_raw = mne.io.read_raw_fif(file_path, preload=True)
+
+            first_time = origin_raw.first_time
+            last_time = origin_raw.last_samp / origin_raw.info['sfreq']
+
+            # Load bad segments info
+            subject_id_dir = Path(selected_file).parent.name
+            artifact_dir = Path(selected_file).parent.parent / "artifact_report" / subject_id_dir
+            bad_segments_file = artifact_dir / f"{subject_id_dir}_preproc-raw_bad_segments.txt"
+            bad_segments = load_bad_segments(bad_segments_file, origin_raw)
+
+            # Initialize navigation mode
+            if 'navigation_mode' not in st.session_state:
+                st.session_state.navigation_mode = 'manual' if not bad_segments else 'artifact'
+
+            # Navigation mode selector (only show if artifacts exist)
+            if bad_segments:
+                nav_mode = st.radio(
+                    "Navigation Mode",
+                    options=['artifact','manual'],
+                    format_func=lambda x: '⏰ Manual Time' if x == 'manual' else '🔴 Artifact Jump',
+                    horizontal=True,
+                    key='navigation_mode'
+                )
+            else:
+                nav_mode = 'manual'
+
+            # ========== MANUAL TIME NAVIGATION ==========
+            if nav_mode == 'manual':
+                with st.expander("⏰ Time Navigation", expanded=True):
+                    st.caption(f"**Total Duration:** {(last_time - first_time):.2f} s")
+
+                    # Initialize manual start time
+                    if 'manual_start_time' not in st.session_state:
+                        st.session_state.manual_start_time = 0.0
+
+                    manual_start_time = st.number_input(
+                        f'Start Time (s)',
+                        min_value=0.,
+                        max_value=(last_time - first_time - time_duration),
+                        value=st.session_state.manual_start_time,
+                        step=1.0,
+                        format="%.2f",
+                        help=f"Range: [0, {(last_time - first_time - time_duration):.2f}] s",
+                        key='manual_time_input'
+                    )
+                    st.session_state.manual_start_time = manual_start_time
+                    start_time = manual_start_time
+
+            # Initialize channel navigation
+            if 'start_channel' not in st.session_state:
+                st.session_state.start_channel = 12
+
+            with st.expander("📡 Channel Navigation", expanded=True):
+                st.caption(f"**Total Channels:** {len(origin_raw.ch_names)}")
+                start_channel = st.slider(
+                    'Starting Channel',
+                    min_value=0,
+                    max_value=len(origin_raw.ch_names) - channel_range,
+                    value=st.session_state.start_channel,
+                    step=1,
+                    help="Select the first channel to display"
+                )
+                st.session_state.start_channel = start_channel
+
+                # Navigation buttons
+                col1, col2 = st.columns(2)
+                with col1:
+                    prev_disabled = st.session_state.start_channel <= 0
+                    if st.button('← Prev', use_container_width=True, disabled=prev_disabled, key="ch_prev"):
+                        if st.session_state.start_channel > 0:
+                            st.session_state.start_channel -= channel_range
+                            st.rerun()
+
+                with col2:
+                    next_disabled = st.session_state.start_channel + channel_range >= len(origin_raw.ch_names)
+                    if st.button('Next →', use_container_width=True, disabled=next_disabled, key="ch_next"):
+                        if st.session_state.start_channel + channel_range < len(origin_raw.ch_names):
+                            st.session_state.start_channel += channel_range
+                            st.rerun()
+
+                st.caption(
+                    f"Showing channels {st.session_state.start_channel} - {st.session_state.start_channel + channel_range - 1}")
+
+            # ========== ARTIFACT NAVIGATION ==========
+            if bad_segments and nav_mode == 'artifact':
+                st.markdown("---")
+                st.header("🔴 Artifact Navigation")
+
+                if 'current_bad_index' not in st.session_state:
+                    st.session_state.current_bad_index = 0
+
+                # Ensure index is within bounds
+                if st.session_state.current_bad_index >= len(bad_segments):
+                    st.session_state.current_bad_index = len(bad_segments) - 1
+                if st.session_state.current_bad_index < 0:
+                    st.session_state.current_bad_index = 0
+
+                # Display current position info (显示相对时间)
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.metric(
+                        "Segment Position",
+                        f"{st.session_state.current_bad_index + 1} / {len(bad_segments)}"
+                    )
+                with col2:
+                    # 显示相对时间（去掉 first_time）
+                    relative_onset = bad_segments[st.session_state.current_bad_index] - first_time
+                    st.metric(
+                        "Onset Time",
+                        f"{relative_onset:.2f}s"
+                    )
+
+                # Navigation buttons
+                col1, col2 = st.columns(2)
+                with col1:
+                    prev_artifact_disabled = st.session_state.current_bad_index <= 0
+                    if st.button('← Prev', use_container_width=True, disabled=prev_artifact_disabled, key="art_prev"):
+                        if st.session_state.current_bad_index > 0:
+                            st.session_state.current_bad_index -= 1
+                            st.rerun()
+
+                with col2:
+                    next_artifact_disabled = st.session_state.current_bad_index >= len(bad_segments) - 1
+                    if st.button('Next →', use_container_width=True, disabled=next_artifact_disabled, key="art_next"):
+                        if st.session_state.current_bad_index < len(bad_segments) - 1:
+                            st.session_state.current_bad_index += 1
+                            st.rerun()
+
+                # Use artifact time
+                current_segment_onset = bad_segments[st.session_state.current_bad_index]
+                start_time = current_segment_onset - first_time
+
+    # ========== MAIN CONTENT ==========
     if selected_file:
+        # Select channels to display
+        selected_channels = origin_raw.ch_names[
+                            st.session_state.start_channel:st.session_state.start_channel + channel_range]
 
-        if "last_selected_file" not in st.session_state:
-            st.session_state.last_selected_file = selected_file
-        elif st.session_state.last_selected_file != selected_file:
-            st.cache_data.clear()
-            st.session_state.last_selected_file = selected_file
-
-        # 构造文件路径
-        file_path = os.path.join(DATA_DIR, selected_file)
-
-        # 加载 MEG 数据
-        origin_raw = mne.io.read_raw_fif(file_path, preload=True)
-        with st.expander("Raw Data Info", expanded=False):
-            st.write(f"Selected File: {selected_file}")
-            st.write("Raw Data Info:", origin_raw)
-            st.write("Raw Data Info:", origin_raw.info)
-
-        # 显示原始波形图
-        # st.subheader("Raw Waveform")
-        # fig_raw = raw.plot(n_channels=10, duration=5, show=False, block=False)
-        # st.pyplot(fig_raw)
-
-        # 显示滤波后的波形图
-        freqrange = st.sidebar.slider('Band-pass frequency range (Hz)', min_value=0, max_value=300,
-                                      value=(1, 40))
-
-        time_duration = st.sidebar.selectbox('Duration (s)', [10, 20, 30, 60], index=2)
-
-        channel_range = st.sidebar.selectbox('Channels', [10, 20, 30, 60, len(origin_raw.ch_names)])
-
-        first_time = origin_raw.first_time
-        last_time = origin_raw.last_samp / origin_raw.info['sfreq']
-        # timerange = st.sidebar.slider('Time (s)', min_value=0.0, max_value=(last_time-first_time-time_duration),
-        #                               value=(0.0,))
-        st.sidebar.info(f"Raw | First time: {first_time}, last time: {last_time}")
-        start_time = st.sidebar.number_input(f'Starting Time (s) | Time Range: [0, {(last_time-first_time-time_duration):.3f}]',
-                                             min_value=0., max_value=(last_time-first_time-time_duration))
-
-        # 初始化当前通道的起始索引（使用Session State 来保持按钮点击后的状态）
-        if 'start_channel' not in st.session_state:
-            st.session_state.start_channel = 12
-
-        # 滑块：选择起始通道索引
-        start_channel = st.sidebar.slider('Starting Channel Index', min_value=0,
-                                          max_value=len(origin_raw.ch_names) - channel_range,
-                                          value=st.session_state.start_channel, step=1)
-
-        # 根据起始通道索引和通道范围选择要显示的通道
-        # selected_channels = raw.ch_names[start_channel:start_channel + channel_range]
-
-        # 更新 session_state 中的起始通道索引
-        st.session_state.start_channel = start_channel
-
-        ch_col1, ch_col2 = st.sidebar.columns([1, 1])
-        # 向前按钮
-        with ch_col1:
-            if st.button('Prev'):
-                if st.session_state.start_channel > 0:
-                    st.session_state.start_channel -= channel_range  # 向前翻页，减去channel_range
-
-        # 向后按钮
-        with ch_col2:
-            if st.button('Next'):
-                if st.session_state.start_channel + channel_range < len(origin_raw.ch_names):
-                    st.session_state.start_channel += channel_range  # 向后翻页，增加channel_range
-
-
-        selected_channels = origin_raw.ch_names[st.session_state.start_channel:st.session_state.start_channel + channel_range]
-
+        # Filter data
         raw = origin_raw.filter(*freqrange, n_jobs=8)
-        # raw = filter_data(origin_raw, freqrange)
 
-        # 显示功率谱密度 (PSD) 图
-        st.subheader("Power Spectral Density (PSD)")
-        # psd_fig = raw.compute_psd().plot(show=False)
-        psd_fig = plot_psd(raw,freqrange)
-        st.pyplot(psd_fig)
-
-        st.subheader(f"Filtered Waveform ({freqrange} Hz)")
-
-        subject_id_dir = Path(selected_file).parent.name
-        artifact_dir = Path(selected_file).parent.parent / "artifact_report" / subject_id_dir
-
+        # Load artifact files
         bad_channels_file = artifact_dir / f"{subject_id_dir}_preproc-raw_bad_channels.txt"
-        bad_segments_file = artifact_dir / f"{subject_id_dir}_preproc-raw_bad_segments.txt"
 
-        ###############################################################################
-        # 1) 检查并加载坏道文件 (xxx_bad_channels.txt)
-        ###############################################################################
+        # Load bad channels
+        bad_channels = []
         if os.path.exists(bad_channels_file):
-            # st.write(f"Loading bad channels from: {bad_channels_file}")
             with open(bad_channels_file, 'r') as f:
                 bad_channels = [ch.strip() for ch in f.read().splitlines() if ch.strip()]
             raw.info['bads'].extend(origin_raw.info['bads'])
             raw.info["bads"].extend(bad_channels)
-        else:
-            st.write("No bad channels file found.")
 
-        ###############################################################################
-        # 2) 检查并加载坏段文件 (xxx_bad_segments.txt)
-        ###############################################################################
-        bad_segments = []
+        # Load bad segments
+        annotations = None
         if os.path.exists(bad_segments_file):
-            # st.write(f"Loading bad segments from: {bad_segments_file}")
             annotations = mne.read_annotations(bad_segments_file)
             old_annot = origin_raw.annotations
             if old_annot != annotations:
-                print(old_annot, annotations)
-                print(old_annot != annotations, "old_annot != annotations")
-                time_format = "%Y-%m-%d %H:%M:%S.%f"
-                new_orig_time = (raw.info['meas_date'] + timedelta(seconds=raw.first_time)).strftime(time_format)
-                annotations = merge_and_deduplicate_annotations(annotations, old_annot, orig_time=origin_raw.annotations.orig_time)
-                raw.set_annotations(annotations)  # cache后，会丢失Annotation，故重新设置. | 会根据raw的first sample，重新计算offset，导致错误的偏移。
-                bad_segments = annotations.onset.tolist()
-        else:
-            st.write("No bad segments file found.")
+                annotations = merge_and_deduplicate_annotations(
+                    annotations,
+                    old_annot,
+                    orig_time=origin_raw.annotations.orig_time
+                )
+                raw.set_annotations(annotations)
 
+        # ========== POWER SPECTRAL DENSITY ==========
+        st.markdown("### 📊 Power Spectral Density (PSD)")
+        with st.spinner("Computing PSD..."):
+            psd_fig = plot_psd(raw, freqrange)
+            st.pyplot(psd_fig)
 
-        # 状态管理，跟踪当前坏段索引
-        if 'current_bad_index' not in st.session_state:
-            st.session_state.current_bad_index = 0
+        st.markdown("---")
 
-        # 显示当前坏段的 onset 时间
-        print("bad_segments::",bad_segments)
-        if bad_segments:
-            st.sidebar.markdown(
-                "<hr style='margin-top: 0.5rem; margin-bottom: 0.5rem;'>",
-                unsafe_allow_html=True
+        # ========== FILTERED WAVEFORM ==========
+        st.markdown(f"### 📈 Filtered Waveform ({freqrange[0]}-{freqrange[1]} Hz)")
+
+        # Show current view info with navigation mode indicator
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            nav_icon = "⏰" if st.session_state.navigation_mode == 'manual' else "🔴"
+            st.info(f"{nav_icon} **Time:** {start_time:.2f} - {start_time + time_duration:.2f} s")
+        with col2:
+            st.info(
+                f"📡 **Channels:** {st.session_state.start_channel} - {st.session_state.start_channel + channel_range - 1}")
+        with col3:
+            st.info(f"🎚️ **Filter:** {freqrange[0]}-{freqrange[1]} Hz")
+
+        with st.spinner("Rendering waveform..."):
+            fig_filtered = raw.plot(
+                picks=selected_channels,
+                n_channels=channel_range,
+                duration=time_duration,
+                start=start_time,
+                show=False,
+                block=False,
+                show_scrollbars=False
             )
-            st.sidebar.markdown("Artifact View")
-            col1, col2 = st.sidebar.columns(2)
-            with col1:
-                if st.button('PrevBadSeg'):
-                    if st.session_state.current_bad_index > 0:
-                        st.session_state.current_bad_index -= 1
+            st.pyplot(fig_filtered)
 
-            with col2:
-                if st.button('NextBadSeg'):
-                    if st.session_state.current_bad_index < len(bad_segments) - 1:
-                        st.session_state.current_bad_index += 1
+        st.markdown("---")
 
-            current_segment_onset = bad_segments[st.session_state.current_bad_index]
-            st.sidebar.info(f"Current Bad Segment Onset: {current_segment_onset:.2f} s")
-            start_time = current_segment_onset - first_time
+        # ========== ARTIFACT ANNOTATION EDITOR ==========
+        st.markdown("### ✏️ Artifact Annotation Editor")
 
-        fig_filtered = raw.plot(picks=selected_channels, n_channels=channel_range, duration=time_duration,
-                                start=start_time,
-                                # show_first_samp=True,
-                                show=False, block=False, show_scrollbars=False)
-        st.pyplot(fig_filtered)
-
-        with st.expander("Artifacts Info", expanded=False):
-            st.write(f"Loading bad channels from: {bad_channels_file}")
-            st.write(f"Loading bad segments from: {bad_segments_file}")
-
-        # # 显示功率谱密度 (PSD) 图
-        # st.subheader("Power Spectral Density (PSD)")
-        # # psd_fig = raw.compute_psd().plot(show=False)
-        # psd_fig = plot_psd(raw)
-        # st.pyplot(psd_fig)
-
+        # Initialize session states
         if "bad_segments" not in st.session_state:
             st.session_state.bad_segments = raw.annotations
-
         if "bad_channels" not in st.session_state:
             st.session_state.bad_channels = bad_channels
-
         if "save_triggered_s" not in st.session_state:
             st.session_state.save_triggered_s = False
-
         if "save_triggered_c" not in st.session_state:
             st.session_state.save_triggered_c = False
-
         if "save_triggered_r" not in st.session_state:
             st.session_state.save_triggered_r = False
 
         with st.form("edit_bad_channels"):
+            col1, col2 = st.columns([1, 2])
 
-            col1, col2 = st.columns([1, 2.4])
             with col1:
-                # 显示坏道检测结果
-                # st.subheader("Bad Channels")
-                st.write("##### Bad Channels")
+                st.markdown("#### 🔴 Bad Channels")
+                st.caption(f"Total bad channels: {len(bad_channels)}")
                 raw.info["bads"] = bad_channels
-                # st.write("Bad channels:", raw.info["bads"])
-                bad_ch_df = st.data_editor(pd.DataFrame(raw.info['bads'], columns=['Bad channels']), num_rows="dynamic")
+                bad_ch_df = st.data_editor(
+                    pd.DataFrame(raw.info['bads'], columns=['Bad Channels']),
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    height=300
+                )
                 bad_ch_df.dropna(inplace=True)
+
             with col2:
-                # st.subheader("Bad Segments")
-                st.write("##### Bad Segments")
-                # example：raw.annotations.append(onset=10, duration=5, description="Bad segment")
-                bad_segments = raw.annotations
-                bad_seg_df = st.data_editor(bad_segments.to_data_frame(time_format=None), num_rows="dynamic")
-                bad_seg_df.dropna(inplace=True)
-                bad_seg_anat = mne.Annotations(onset=bad_seg_df['onset'].tolist(),
-                                               duration=bad_seg_df['duration'].tolist(),
-                                               description=bad_seg_df['description'].tolist(),
-                                               orig_time=origin_raw.annotations.orig_time)
-                st.info(f"onset=Waveform_times + {raw.first_time}")
-            st.info("💡 Tip: Click elsewhere after editing to ensure changes are captured")
-            save_changes = st.form_submit_button("Save Annotations",use_container_width=True)
+                st.markdown("#### 📊 Bad Segments")
+                bad_segments_annot = raw.annotations
+                st.caption(f"Total bad segments: {len(bad_segments_annot)}")
+
+                # 转换为相对时间用于显示
+                bad_seg_df_display = bad_segments_annot.to_data_frame(time_format=None)
+                bad_seg_df_display['onset'] = bad_seg_df_display['onset'] - first_time
+
+                # 重命名列以更清晰
+                bad_seg_df_display = bad_seg_df_display.rename(columns={
+                    'onset': 'onset (relative)',
+                    'duration': 'duration',
+                    'description': 'description'
+                })
+
+                bad_seg_df_edited = st.data_editor(
+                    bad_seg_df_display,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    height=300,
+                    column_config={
+                        "onset (relative)": st.column_config.NumberColumn(
+                            "Onset (s)",
+                            help="Time relative to waveform display (0-based)",
+                            format="%.3f"
+                        ),
+                        "duration": st.column_config.NumberColumn(
+                            "Duration (s)",
+                            format="%.3f"
+                        )
+                    }
+                )
+                bad_seg_df_edited.dropna(inplace=True)
+
+                # 转换回绝对时间用于保存
+                bad_seg_df_edited['onset'] = bad_seg_df_edited['onset (relative)'] + first_time
+
+                bad_seg_anat = mne.Annotations(
+                    onset=bad_seg_df_edited['onset'].tolist(),
+                    duration=bad_seg_df_edited['duration'].tolist(),
+                    description=bad_seg_df_edited['description'].tolist(),
+                    orig_time=origin_raw.annotations.orig_time
+                )
+
+            # 更新提示信息
+            st.info(
+                f"💡 **Tip:** The 'Onset' shown above matches the waveform time (0-based). "
+                f"Actual stored value = Displayed value + {first_time:.3f}s | "
+                f"Click outside the cell after editing to ensure changes are captured"
+            )
+
+            # Save button
+            st.markdown("<br>", unsafe_allow_html=True)
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col2:
+                save_changes = st.form_submit_button(
+                    "💾 Save Changes",
+                    use_container_width=True,
+                    type="primary"
+                )
+
             if save_changes:
-                st.session_state.save_triggered_s = True
-                st.session_state.save_triggered_c = True
-                st.session_state.save_triggered_r = True
-                st.session_state.bad_segments = bad_seg_anat
-                st.session_state.bad_channels = bad_ch_df
+                # ====== 新增：验证 bad segments 时间范围 ======
+                total_duration = last_time - first_time
+                invalid_segments = []
 
-                bad_seg_anat.save(bad_segments_file, overwrite=True)
-                bad_ch_df.to_csv(bad_channels_file, header=False, index=False, sep='\n')
-                st.success(f"Saved:{bad_channels_file}")
-                st.success(f"Saved:{bad_segments_file}")
+                for idx, row in bad_seg_df_edited.iterrows():
+                    onset_rel = row['onset (relative)']
+                    duration = row['duration']
 
-                # 修改对应脑磁文件的Annotation和bads info.
-                origin_raw.set_annotations(bad_seg_anat)
-                print("bad_segments:",bad_seg_anat.to_data_frame(None))
-                bad_channels_list = bad_ch_df['Bad channels'].tolist()
-                print("bad_ch_df:",bad_channels_list)
+                    # 检查是否超出范围
+                    if onset_rel < 0:
+                        invalid_segments.append(f"Segment {idx}: onset {onset_rel:.3f}s < 0")
+                    elif onset_rel + duration > total_duration:
+                        invalid_segments.append(
+                            f"Segment {idx}: end time {onset_rel + duration:.3f}s exceeds duration {total_duration:.3f}s"
+                        )
 
-                origin_raw.info['bads'] = bad_channels_list
-                origin_raw.save(file_path, overwrite=True)
-                st.success(f"Overwriting:{file_path}")
+                if invalid_segments:
+                    st.error("❌ **Invalid time ranges detected:**")
+                    for msg in invalid_segments:
+                        st.error(f"  • {msg}")
+                    st.warning(f"⚠️ Please ensure all segments are within 0 - {total_duration:.3f}s")
+                    st.stop()  # 阻止保存
 
-                # reset bad seg/channel index view.
-                st.session_state.current_bad_index = 0
+                # ====== 新增：验证 bad channels 是否存在于 raw 中 ======
+                invalid_channels = []
+                valid_ch_names = set(origin_raw.ch_names)
 
+                for idx, row in bad_ch_df.iterrows():
+                    ch_name = row['Bad Channels']
+                    if ch_name not in valid_ch_names:
+                        invalid_channels.append(ch_name)
+
+                if invalid_channels:
+                    st.error("❌ **Invalid channel names detected:**")
+                    for ch in invalid_channels:
+                        st.error(f"  • Channel '{ch}' not found in raw data")
+                    st.warning(f"⚠️ Please ensure all channels exist in the raw data")
+                    with st.expander("📋 Available channels", expanded=False):
+                        st.write(origin_raw.ch_names)
+                    st.stop()  # 阻止保存
+                # ====== 验证结束 ======
+
+                with st.spinner("Saving changes..."):
+                    st.session_state.save_triggered_s = True
+                    st.session_state.save_triggered_c = True
+                    st.session_state.save_triggered_r = True
+                    st.session_state.bad_segments = bad_seg_anat
+                    st.session_state.bad_channels = bad_ch_df
+
+                    # Save files
+                    bad_seg_anat.save(bad_segments_file, overwrite=True)
+                    bad_ch_df.to_csv(bad_channels_file, header=False, index=False, sep='\n')
+
+                    # Update raw data
+                    origin_raw.set_annotations(bad_seg_anat)
+                    bad_channels_list = bad_ch_df['Bad Channels'].tolist()
+                    origin_raw.info['bads'] = bad_channels_list
+                    origin_raw.save(file_path, overwrite=True)
+
+                    # Reset navigation to first segment (or keep current if still valid)
+                    new_bad_segments = load_bad_segments(bad_segments_file, origin_raw)
+                    if 'current_bad_index' in st.session_state:
+                        if st.session_state.current_bad_index >= len(new_bad_segments):
+                            st.session_state.current_bad_index = 0
+
+                st.success(f"✅ Successfully saved changes!")
+
+                # Display saved files info with time conversion example
+                with st.expander("📄 Saved Files Details", expanded=False):
+                    st.markdown(f"- **Bad channels:** `{bad_channels_file.name}` ({len(bad_ch_df)} channels)")
+                    st.markdown(f"- **Bad segments:** `{bad_segments_file.name}` ({len(bad_seg_anat)} segments)")
+                    st.markdown(f"- **Raw data:** `{Path(file_path).name}`")
+                    st.divider()
+                    st.markdown("**Time Conversion:**")
+                    st.markdown(f"- Display time (relative): 0-based")
+                    st.markdown(f"- Stored time (absolute): Display time + {first_time:.3f}s")
+                    if len(bad_seg_anat) > 0:
+                        st.markdown(
+                            f"- Example: Display `{bad_seg_anat[0]['onset'] - first_time:.3f}s` → Stored `{bad_seg_anat[0]['onset']:.3f}s`")
+
+                time.sleep(1)
                 st.rerun()
             else:
                 st.session_state.save_triggered_s = False
                 st.session_state.save_triggered_c = False
                 st.session_state.save_triggered_r = False
 
-        # 根据保存状态提供提示
+        # ========== ADDITIONAL INFO ==========
+        with st.expander("ℹ️ File Information", expanded=False):
+            st.markdown(f"**Selected File:** `{selected_file}`")
+            st.markdown(f"**Bad Channels File:** `{bad_channels_file}`")
+            st.markdown(f"**Bad Segments File:** `{bad_segments_file}`")
+            st.divider()
+            st.markdown("**Raw Data Info:**")
+            st.text(origin_raw)
+            st.divider()
+            st.markdown("**Measurement Info:**")
+            st.json({
+                "sfreq": origin_raw.info['sfreq'],
+                "n_channels": len(origin_raw.ch_names),
+                "duration": f"{(last_time - first_time):.2f} s",
+                "first_time": f"{first_time:.3f} s",
+                "n_bad_channels": len(raw.info['bads']),
+                "n_bad_segments": len(raw.annotations)
+            })
+
+        # Status footer
+        st.markdown("---")
         if st.session_state.save_triggered_c and st.session_state.save_triggered_s and st.session_state.save_triggered_r:
-            st.info("Save operation completed.")
+            st.info("✅ All changes have been saved successfully.")
         else:
-            st.info("No save operation performed.")
+            st.caption("💾 No unsaved changes")

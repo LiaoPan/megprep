@@ -1,233 +1,428 @@
-#coding:utf-8
-import streamlit as st
-from reports.utils import in_docker
-from pathlib import Path
+# !/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import os
-# Preprocess
-# set report root dir.
-if in_docker():
-    report_root_dir = "/output"
-else:
-    report_root_dir = st.session_state.get("dataset_report_path")
-
-DATA_DIR = os.path.join(report_root_dir, "preprocessed")
-
-
-# ICA
-# set report root dir.
-if in_docker():
-    report_root_dir = Path("/output")
-else:
-    report_root_dir = Path(st.session_state.get("dataset_report_path"))
-
-DEFAULT_ICA_REPORT_DIR = report_root_dir / "preprocessed" / "ica_report"
-
-
-
-# Trans
-if in_docker():
-    report_root_dir = Path("/output")
-    default_subjects_dir = Path("/smri")
-else:
-    report_root_dir = Path(st.session_state.get("dataset_report_path"))
-    default_subjects_dir = Path(st.session_state.get("subjects_dir"))
-
-default_meg_dir = report_root_dir / "preprocessed"
-default_trans_dir = report_root_dir / "preprocessed" / "trans"
-
+import json
 import streamlit as st
 import pandas as pd
+import mne
 from pathlib import Path
+from reports.utils import in_docker, filter_files_by_keyword
+
+# ==================== PATH CONFIGURATION ====================
+if in_docker():
+    report_root_dir = Path("/output")
+else:
+    report_root_dir = Path(st.session_state.get("dataset_report_path"))
+
+preprocessed_dir = report_root_dir / "preprocessed"
+ica_report_dir = preprocessed_dir / "ica_report"
+artifact_report_dir = preprocessed_dir / "artifact_report"
+trans_dir = preprocessed_dir / "trans"
+
+# ==================== STYLING ====================
+st.markdown("""
+<style>
+    /* Hide default elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Main header */
+    .main-header {
+        color: white;
+        padding: 20px;
+        border-radius: 15px;
+        text-align: center;
+        font-weight: 700;
+        margin-bottom: 30px;
+    }
+
+    /* Metric cards */
+    .metric-card {
+        background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+        border-radius: 12px;
+        padding: 1rem;
+        border-left: 4px solid #667eea;
+    }
+
+    /* Section headers */
+    .section-header {
+        font-size: 1.3rem;
+        font-weight: 600;
+        color: #2c3e50;
+        padding: 0.5rem 0;
+        border-bottom: 2px solid #667eea;
+        margin: 1.5rem 0 1rem 0;
+    }
+
+    /* Status badges */
+    .status-pass {
+        color: #28a745;
+        font-weight: 600;
+    }
+    .status-warning {
+        color: #ffc107;
+        font-weight: 600;
+    }
+    .status-fail {
+        color: #dc3545;
+        font-weight: 600;
+    }
+
+    /* Buttons */
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
-def matrices_approx_equal(m1, m2, tol=1e-6):
-    """Check if two 4x4 matrices are approximately equal within tolerance"""
-    if not m1 or not m2:
-        return False
-    for row1, row2 in zip(m1, m2):
-        for a, b in zip(row1, row2):
-            if abs(a - b) > tol:
-                return False
-    return True
+# ==================== DATA LOADING FUNCTIONS ====================
 
-
-def parse_matrix(txt):
-    """Parse matrix string"""
-    try:
-        rows = txt.strip().split('\n')
-        return [[float(x) for x in row.split(',')] for row in rows]
-    except Exception:
-        return None
-
-
-def load_meg_data(file_path):
+def get_all_subjects():
     """
-    Simulate loading MEG file data
-    In production, replace with actual file reading logic (e.g., MNE-Python)
-    Returns data in dictionary format
+    Scan preprocessed directory to get all subject directories
+    Returns list of subject directory names
     """
-    # Using simulated data here, should read real files in production
-    import random
-    random.seed(hash(file_path))
+    subjects = []
 
+    # Scan main preprocessed directory for subject folders
+    if preprocessed_dir.exists():
+        for item in preprocessed_dir.iterdir():
+            if item.is_dir() and not item.name.startswith('.'):
+                # Check if it's a valid subject directory (contains .fif file)
+                fif_files = list(item.glob("*_preproc-raw.fif"))
+                if fif_files:
+                    subjects.append(item.name)
+
+    return sorted(subjects)
+
+
+def load_ica_data(subject_dir):
+    """Load ICA component data"""
+    ica_subject_dir = ica_report_dir / subject_dir
+    data = {
+        'has_ecg': False,
+        'has_eog': False,
+        'ecg_scores': [],
+        'eog_scores': [],
+        'marked_components': 0
+    }
+
+    # Load ECG/EOG scores
+    score_file = ica_subject_dir / "ecg_eog_scores.json"
+    if score_file.exists():
+        try:
+            with open(score_file, 'r') as f:
+                scores = json.load(f)
+                data['has_ecg'] = len(scores.get('ecg_indices', [])) > 0
+                data['has_eog'] = len(scores.get('eog_indices', [])) > 0
+                data['ecg_scores'] = scores.get('ecg', [])
+                data['eog_scores'] = scores.get('eog', [])
+        except Exception as e:
+            st.warning(f"Error loading ICA scores for {subject_dir}: {e}")
+
+    # Load marked components
+    marked_file = ica_subject_dir / "marked_components.txt"
+    if marked_file.exists():
+        try:
+            with open(marked_file, 'r') as f:
+                components = [line.strip() for line in f.readlines() if line.strip()]
+                data['marked_components'] = len(components)
+        except Exception as e:
+            st.warning(f"Error loading marked components for {subject_dir}: {e}")
+
+    return data
+
+
+def load_artifact_data(subject_dir):
+    """Load bad channels and bad segments data"""
+    artifact_subject_dir = artifact_report_dir / subject_dir
+    data = {
+        'total_channels': 306,  # Default for MEG
+        'bad_channels': 0,
+        'bad_channels_list': [],
+        'total_segments(10s segments)': 0,
+        'bad_segments': 0
+    }
+
+    # Load bad channels
+    bad_ch_files = list(artifact_subject_dir.glob("*_bad_channels.txt"))
+    if bad_ch_files:
+        try:
+            with open(bad_ch_files[0], 'r') as f:
+                channels = [line.strip() for line in f.readlines() if line.strip()]
+                data['bad_channels'] = len(channels)
+                data['bad_channels_list'] = channels
+        except Exception as e:
+            st.warning(f"Error loading bad channels for {subject_dir}: {e}")
+
+    # Load bad segments
+    bad_seg_files = list(artifact_subject_dir.glob("*_bad_segments.txt"))
+    if bad_seg_files:
+        try:
+            annotations = mne.read_annotations(bad_seg_files[0])
+            data['bad_segments'] = len(annotations)
+
+            # Get total segments from raw file
+            raw_files = list((preprocessed_dir / subject_dir).glob("*_preproc-raw.fif"))
+            if raw_files:
+                raw = mne.io.read_raw_fif(raw_files[0], preload=False, verbose=False)
+                duration = raw.times[-1]
+                data['total_segments(10s segments)'] = int(duration / 10)  # Assuming 10s segments
+        except Exception as e:
+            st.warning(f"Error loading bad segments for {subject_dir}: {e}")
+
+    return data
+
+
+def load_coregistration_data(subject_dir):
+    """Load coregistration quality data"""
+    coreg_subject_dir = trans_dir / subject_dir
+    data = {
+        'dist_mean': None,
+        'dist_max': None,
+        'dist_min': None,
+        'has_data': False
+    }
+
+    # Load distance data
+    dists_file = coreg_subject_dir / "dists.csv"
+    if dists_file.exists():
+        try:
+            df = pd.read_csv(dists_file)
+            data['dist_mean'] = df['dist_mean(mm)'].values[0]
+            data['dist_max'] = df['dist_max(mm)'].values[0]
+            data['dist_min'] = df['dist_min(mm)'].values[0]
+            data['has_data'] = True
+        except Exception as e:
+            st.warning(f"Error loading coregistration data for {subject_dir}: {e}")
+
+    return data
+
+
+def load_meg_data(subject_dir):
+    """
+    Load all MEG preprocessing data for a subject
+    Returns comprehensive data dictionary
+    """
     return {
-        'ica_ecg': [0.15, 0.18] if random.random() > 0.3 else None,
-        'ica_eog': [0.25, 0.10] if random.random() > 0.2 else None,
-        'total_channels': 306,
-        'bad_channels': random.randint(5, 50),
-        'total_segments': 500,
-        'bad_segments': random.randint(10, 100),
-        'initial_trans': [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
-        'final_trans': [[1, 0, 0, 0.01], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]] if random.random() > 0.4 else [
-            [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+        'subject': subject_dir,
+        'ica': load_ica_data(subject_dir),
+        'artifacts': load_artifact_data(subject_dir),
+        'coregistration': load_coregistration_data(subject_dir)
     }
 
 
 def check_meg_file(data, check_settings):
     """
-    Check a single MEG file data based on enabled check settings
-    Returns list of alarms
+    Check a single subject's data based on enabled check settings
+    Returns list of alarms (category, description)
     """
     alarms = []
+    subject = data['subject']
 
-    # 1. ICA component check
+    # 1. ICA component checks
+    ica_data = data['ica']
+
     if check_settings['check_ica_ecg']:
-        if not data.get('ica_ecg'):
-            alarms.append(("ICA", "ECG component missing"))
+        if not ica_data['has_ecg']:
+            alarms.append(("ICA", "No ECG-related components detected"))
+        elif ica_data['marked_components'] == 0:
+            alarms.append(("ICA", "ECG components detected but none marked"))
 
     if check_settings['check_ica_eog']:
-        if not data.get('ica_eog'):
-            alarms.append(("ICA", "EOG component missing"))
+        if not ica_data['has_eog']:
+            alarms.append(("ICA", "No EOG-related components detected"))
+        elif ica_data['marked_components'] == 0:
+            alarms.append(("ICA", "EOG components detected but none marked"))
 
-    # 2. Artifact detection check - Bad Channels
+    # 2. Bad channels check
     if check_settings['check_bad_channels']:
-        bad_channels = data.get('bad_channels', 0)
-        bad_channel_threshold = check_settings['bad_channel_threshold']
+        artifact_data = data['artifacts']
+        bad_channels = artifact_data['bad_channels']
+        threshold = check_settings['bad_channel_threshold']
 
-        if bad_channels > bad_channel_threshold:
-            alarms.append(("Artifacts Detection",
-                           f"Too many bad channels: {bad_channels} (threshold: {bad_channel_threshold})"))
+        if bad_channels > threshold:
+            alarms.append((
+                "Artifacts",
+                f"Excessive bad channels: {bad_channels}/{artifact_data['total_channels']} "
+                f"(threshold: {threshold})"
+            ))
 
-    # 3. Artifact detection check - Bad Segments
+    # 3. Bad segments check
     if check_settings['check_bad_segments']:
-        bad_segments = data.get('bad_segments', 0)
-        bad_segment_threshold = check_settings['bad_segment_threshold']
+        artifact_data = data['artifacts']
+        bad_segments = artifact_data['bad_segments']
+        threshold = check_settings['bad_segment_threshold']
 
-        if bad_segments > bad_segment_threshold:
-            alarms.append(("Artifacts Detection",
-                           f"Too many bad segments: {bad_segments} (threshold: {bad_segment_threshold})"))
+        if bad_segments > threshold:
+            alarms.append((
+                "Artifacts",
+                f"Excessive bad segments: {bad_segments} (threshold: {threshold})"
+            ))
 
     # 4. Coregistration check
     if check_settings['check_coregistration']:
-        initial_trans = data.get('initial_trans')
-        final_trans = data.get('final_trans')
+        coreg_data = data['coregistration']
 
-        if initial_trans and final_trans:
-            if matrices_approx_equal(initial_trans, final_trans):
-                alarms.append(
-                    ("Coregistration", "Initial and final coregistration matrices are identical (no fine-tuning)"))
+        if not coreg_data['has_data']:
+            alarms.append(("Coregistration", "Coregistration data missing"))
         else:
-            alarms.append(("Coregistration", "Coregistration matrix data missing or cannot be parsed"))
+            mean_dist = coreg_data['dist_mean']
+            max_dist = coreg_data['dist_max']
+            mean_threshold = check_settings['coreg_mean_threshold']
+            max_threshold = check_settings['coreg_max_threshold']
+
+            if mean_dist > mean_threshold:
+                alarms.append((
+                    "Coregistration",
+                    f"Poor mean distance: {mean_dist:.2f}mm (threshold: {mean_threshold}mm)"
+                ))
+
+            if max_dist > max_threshold:
+                alarms.append((
+                    "Coregistration",
+                    f"Poor max distance: {max_dist:.2f}mm (threshold: {max_threshold}mm)"
+                ))
 
     return alarms
 
 
-st.title("🧠 Report Checker")
-st.markdown(
-    """
-    Supports quality control checks for multiple MEG files
-    - 📋 **ICA Component Extraction Completeness**
-    - 🔍 **Artifact Detection Bad Channel/Segment Thresholds**
-    - 🎯 **Coregistration Matrix Fine-tuning**
-    """
-)
+# ==================== MAIN APP ====================
 
-# Sidebar: File Import Configuration & Settings
+st.markdown('<h2 class="main-header">🧠 MEG Preprocessing Quality Summary</h2>', unsafe_allow_html=True)
+
+st.markdown("""
+**Automated quality control for MEG preprocessing pipeline:**
+- 📋 ICA component extraction completeness
+- 🔍 Artifact detection thresholds
+- 🎯 Coregistration quality metrics
+""")
+
+# ==================== SIDEBAR ====================
 with st.sidebar:
-    st.header("📁 File Import")
+    st.markdown("""
+        <div style='text-align: center; padding: 0px;'>
+            <h2>⚙️ Settings</h2>
+        </div>
+    """, unsafe_allow_html=True)
 
-    input_mode = st.radio(
-        "Select Import Method",
-        ["Text Input File Paths", "Generate Test Files"]
+    # File Selection
+    st.markdown('<div class="section-header">📁 Subject Selection</div>', unsafe_allow_html=True)
+
+    # Get all subjects
+    all_subjects = get_all_subjects()
+
+    if not all_subjects:
+        st.error("⚠️ No subjects found in preprocessed directory")
+        st.stop()
+
+    # Filter functionality
+    if 'filter_keyword' not in st.session_state:
+        st.session_state.filter_keyword = ""
+
+    filter_keyword = st.text_input(
+        "🔍 Filter subjects:",
+        value=st.session_state.filter_keyword,
+        placeholder="e.g., sub-01, task-aef",
+        help="Filter subjects by keyword (case-insensitive)"
     )
+    st.session_state.filter_keyword = filter_keyword
 
-    file_list = []
+    # Apply filter
+    filtered_subjects = filter_files_by_keyword(all_subjects, filter_keyword)
 
-    if input_mode == "Text Input File Paths":
-        file_paths = st.text_area(
-            "Enter file paths (one per line)",
-            height=150,
-            placeholder="/path/to/meg_file1.fif\n/path/to/meg_file2.fif\n..."
-        )
-        if file_paths:
-            file_list = [line.strip() for line in file_paths.split('\n') if line.strip()]
+    # Select all or manual selection
+    select_all = st.checkbox("Select All Subjects", value=True)
 
-    else:  # Generate test files
-        num_files = st.slider("Number of test files to generate", 1, 100, 20)
-        if st.button("Generate Test Files"):
-            file_list = [f"subject_{i:03d}_meg.fif" for i in range(1, num_files + 1)]
-            st.session_state['file_list'] = file_list
-
-    if 'file_list' in st.session_state:
-        file_list = st.session_state['file_list']
+    if select_all:
+        selected_subjects = filtered_subjects
     else:
-        st.session_state['file_list'] = file_list
+        selected_subjects = st.multiselect(
+            "Choose subjects:",
+            filtered_subjects,
+            default=filtered_subjects[:5] if len(filtered_subjects) >= 5 else filtered_subjects
+        )
 
-    # Separator
+    st.caption(f"✓ Selected: {len(selected_subjects)} / {len(all_subjects)} subjects")
+
     st.markdown("---")
 
     # Check Settings
-    st.header("🔍 Check Settings")
+    st.markdown('<div class="section-header">🔍 Quality Checks</div>', unsafe_allow_html=True)
 
     # ICA Checks
     with st.expander("📋 ICA Components", expanded=True):
-        st.caption("Flag if component is missing:")
-        check_ica_ecg = st.checkbox("Check ECG Component", value=True, key="check_ica_ecg",
-                                    help="Flag if ECG component is missing")
-        check_ica_eog = st.checkbox("Check EOG Component", value=True, key="check_ica_eog",
-                                    help="Flag if EOG component is missing")
+        check_ica_ecg = st.checkbox(
+            "Check ECG Component",
+            value=True,
+            help="Flag if no ECG-related components detected or none marked"
+        )
+        check_ica_eog = st.checkbox(
+            "Check EOG Component",
+            value=True,
+            help="Flag if no EOG-related components detected or none marked"
+        )
 
     # Bad Channels Check
     with st.expander("🔴 Bad Channels", expanded=True):
-        check_bad_channels = st.checkbox("Enable Bad Channels Check", value=True, key="check_bad_channels")
-        if check_bad_channels:
-            bad_channel_threshold = st.number_input(
-                "Maximum allowed bad channels",
-                min_value=0,
-                max_value=500,
-                value=30,
-                step=1,
-                help="Flag if number of bad channels exceeds this value",
-                key="bad_channel_threshold"
-            )
-            st.caption(f"⚠️ Will flag if bad channels > {bad_channel_threshold}")
-        else:
-            bad_channel_threshold = 30
+        check_bad_channels = st.checkbox("Enable Bad Channels Check", value=True)
+        bad_channel_threshold = st.number_input(
+            "Maximum allowed bad channels",
+            min_value=0,
+            max_value=306,
+            value=30,
+            step=5,
+            disabled=not check_bad_channels
+        )
 
     # Bad Segments Check
     with st.expander("📊 Bad Segments", expanded=True):
-        check_bad_segments = st.checkbox("Enable Bad Segments Check", value=True, key="check_bad_segments")
-        if check_bad_segments:
-            bad_segment_threshold = st.number_input(
-                "Maximum allowed bad segments",
-                min_value=0,
-                max_value=1000,
-                value=50,
-                step=1,
-                help="Flag if number of bad segments exceeds this value",
-                key="bad_segment_threshold"
-            )
-            st.caption(f"⚠️ Will flag if bad segments > {bad_segment_threshold}")
-        else:
-            bad_segment_threshold = 50
+        check_bad_segments = st.checkbox("Enable Bad Segments Check", value=True)
+        bad_segment_threshold = st.number_input(
+            "Maximum allowed bad segments",
+            min_value=0,
+            max_value=1000,
+            value=50,
+            step=10,
+            disabled=not check_bad_segments
+        )
 
     # Coregistration Check
-    with st.expander("🎯 Coregistration", expanded=True):
-        check_coregistration = st.checkbox("Enable Coregistration Check", value=True, key="check_coregistration")
-        if check_coregistration:
-            st.caption("Checks if initial and final transformation matrices are identical")
+    with st.expander("🎯 Coregistration Quality", expanded=True):
+        check_coregistration = st.checkbox("Enable Coregistration Check", value=True)
+        coreg_mean_threshold = st.number_input(
+            "Mean distance threshold (mm)",
+            min_value=0.0,
+            max_value=10.0,
+            value=5.0,
+            step=0.5,
+            disabled=not check_coregistration,
+            help="Flag if mean distance > threshold"
+        )
+        coreg_max_threshold = st.number_input(
+            "Max distance threshold (mm)",
+            min_value=0.0,
+            max_value=20.0,
+            value=10.0,
+            step=1.0,
+            disabled=not check_coregistration,
+            help="Flag if max distance > threshold"
+        )
 
-    # Collect all check settings
+    # Collect settings
     check_settings = {
         'check_ica_ecg': check_ica_ecg,
         'check_ica_eog': check_ica_eog,
@@ -236,120 +431,120 @@ with st.sidebar:
         'check_bad_segments': check_bad_segments,
         'bad_segment_threshold': bad_segment_threshold,
         'check_coregistration': check_coregistration,
+        'coreg_mean_threshold': coreg_mean_threshold,
+        'coreg_max_threshold': coreg_max_threshold,
     }
 
-    # Separator
     st.markdown("---")
 
     # Display Settings
-    st.header("⚙️ Display Settings")
+    st.markdown('<div class="section-header">⚙️ Display Options</div>', unsafe_allow_html=True)
 
     show_mode = st.selectbox(
-        "Display Mode",
-        ["All Files", "Files with Alarms Only", "Files without Alarms Only"]
+        "Filter by status:",
+        ["All Subjects", "With Alarms Only", "Passed Only"]
     )
 
-    page_size = st.selectbox("Items per Page", [10, 20, 50, 100], index=1)
+    page_size = st.selectbox("Items per page:", [10, 20, 50, 100], index=1)
 
-    # Separator
-    # st.markdown("---")
-
-    # Actions
-    # st.header("🔧 Actions")
-    #
-    # if st.button("🔄 Recheck All Files", use_container_width=True):
-    #     st.session_state['check_results'] = {}
-    #     st.rerun()
-
-    # Summary of active checks
+    # Active checks summary
     st.markdown("---")
     st.caption("**Active Checks:**")
     active_checks = []
+    if check_ica_ecg: active_checks.append("✓ ICA ECG")
+    if check_ica_eog: active_checks.append("✓ ICA EOG")
+    if check_bad_channels: active_checks.append(f"✓ Bad Channels (≤{bad_channel_threshold})")
+    if check_bad_segments: active_checks.append(f"✓ Bad Segments (≤{bad_segment_threshold})")
+    if check_coregistration: active_checks.append(f"✓ Coregistration (mean≤{coreg_mean_threshold}mm)")
 
-    if check_ica_ecg:
-        active_checks.append("ICA ECG")
-    if check_ica_eog:
-        active_checks.append("ICA EOG")
-    if check_bad_channels:
-        active_checks.append(f"Bad Channels (max: {bad_channel_threshold})")
-    if check_bad_segments:
-        active_checks.append(f"Bad Segments (max: {bad_segment_threshold})")
-    if check_coregistration:
-        active_checks.append("Coregistration")
+    for check in active_checks:
+        st.caption(check)
 
-    if active_checks:
-        for check in active_checks:
-            st.caption(f"✓ {check}")
-    else:
-        st.caption("⚠️ No checks enabled")
+# ==================== MAIN CONTENT ====================
 
-if not file_list:
-    st.info("👈 Please import file list in the sidebar")
+if not selected_subjects:
+    st.info("👈 Please select subjects in the sidebar")
     st.stop()
 
-# Initialize check results cache
+# Initialize cache
 if 'check_results' not in st.session_state:
     st.session_state['check_results'] = {}
 
-# Check if settings have changed (to trigger recheck)
+# Check if settings changed
 settings_key = str(check_settings)
 if 'last_settings' not in st.session_state or st.session_state['last_settings'] != settings_key:
     st.session_state['check_results'] = {}
     st.session_state['last_settings'] = settings_key
 
-# Display total file count
-st.markdown(f"### 📊 File Statistics")
+# Progress bar for batch processing
+if len(selected_subjects) > 5:
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-# Batch check (lazy loading)
+# Process subjects
 results_summary = []
+for idx, subject in enumerate(selected_subjects):
+    # Update progress
+    if len(selected_subjects) > 5:
+        progress = (idx + 1) / len(selected_subjects)
+        progress_bar.progress(progress)
+        status_text.text(f"Processing {idx + 1}/{len(selected_subjects)}: {subject}")
 
-for file_path in file_list:
-    # Check if already cached
-    if file_path not in st.session_state['check_results']:
-        # Lazy loading: actually read and check file here
-        data = load_meg_data(file_path)
-        alarms = check_meg_file(data, check_settings)
-        st.session_state['check_results'][file_path] = {
-            'data': data,
-            'alarms': alarms
-        }
+    # Check cache
+    if subject not in st.session_state['check_results']:
+        try:
+            data = load_meg_data(subject)
+            alarms = check_meg_file(data, check_settings)
+            st.session_state['check_results'][subject] = {
+                'data': data,
+                'alarms': alarms
+            }
+        except Exception as e:
+            st.warning(f"Error processing {subject}: {e}")
+            continue
 
-    result = st.session_state['check_results'][file_path]
+    result = st.session_state['check_results'][subject]
     alarm_count = len(result['alarms'])
 
     results_summary.append({
-        'file_path': file_path,
+        'subject': subject,
         'alarm_count': alarm_count,
         'has_alarms': alarm_count > 0,
-        'alarms': result['alarms']
+        'alarms': result['alarms'],
+        'data': result['data']
     })
 
+# Clear progress indicators
+if len(selected_subjects) > 5:
+    progress_bar.empty()
+    status_text.empty()
+
 # Calculate statistics
-total_files = len(file_list)
+st.markdown("### 📊 Summary Statistics")
+
+total_subjects = len(results_summary)
 total_with_alarms = sum(1 for r in results_summary if r['has_alarms'])
-total_passed = total_files - total_with_alarms
-pass_rate = (total_passed / total_files * 100) if total_files > 0 else 0
+total_passed = total_subjects - total_with_alarms
+pass_rate = (total_passed / total_subjects * 100) if total_subjects > 0 else 0
 
-# Display statistics with pass rate
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Files", total_files)
-col2.metric("Passed Files", total_passed, delta_color="normal")
-col3.metric("Files with Alarms", total_with_alarms, delta_color="inverse")
-col4.metric("Pass Rate", f"{pass_rate:.1f}%", delta_color="normal")
+col1.metric("Total Subjects", total_subjects)
+col2.metric("✅ Passed", total_passed, delta=None)
+col3.metric("⚠️ With Alarms", total_with_alarms, delta=None)
+col4.metric("Pass Rate", f"{pass_rate:.1f}%")
 
-# Apply filters
+# Apply display filter
 filtered_results = results_summary.copy()
-if show_mode == "Files with Alarms Only":
+if show_mode == "With Alarms Only":
     filtered_results = [r for r in filtered_results if r['has_alarms']]
-elif show_mode == "Files without Alarms Only":
+elif show_mode == "Passed Only":
     filtered_results = [r for r in filtered_results if not r['has_alarms']]
 
-# Display filtered count if different from total
-if len(filtered_results) != total_files:
-    st.info(f"📋 Showing {len(filtered_results)} of {total_files} files based on filter settings")
+if len(filtered_results) != total_subjects:
+    st.info(f"📋 Showing {len(filtered_results)} of {total_subjects} subjects (filter: {show_mode})")
 
-# Pagination logic
-total_pages = (len(filtered_results) + page_size - 1) // page_size if len(filtered_results) > 0 else 1
+# Pagination
+total_pages = max(1, (len(filtered_results) + page_size - 1) // page_size)
 
 if total_pages > 1:
     page = st.selectbox(f"Page (Total: {total_pages})", range(1, total_pages + 1))
@@ -360,38 +555,39 @@ start_idx = (page - 1) * page_size
 end_idx = min(start_idx + page_size, len(filtered_results))
 page_results = filtered_results[start_idx:end_idx]
 
-# Display check results
+# Display results
 st.markdown("---")
-st.subheader(f"Check Results (Page {page}/{total_pages})")
+st.markdown(f"### 📋 Quality Check Results (Page {page}/{total_pages})")
 
-if len(page_results) == 0:
-    st.warning("No files match the current filter settings.")
+if not page_results:
+    st.warning("No subjects match the current filter.")
 else:
     for idx, result in enumerate(page_results, start=start_idx + 1):
-        file_name = Path(result['file_path']).name
+        subject = result['subject']
         alarm_count = result['alarm_count']
 
-        # Status icon
+        # Status styling
         if alarm_count == 0:
             status_icon = "✅"
-            status_color = "green"
+            status_class = "status-pass"
         elif alarm_count <= 2:
             status_icon = "⚠️"
-            status_color = "orange"
+            status_class = "status-warning"
         else:
             status_icon = "❌"
-            status_color = "red"
+            status_class = "status-fail"
 
-        # Expandable file details
-        with st.expander(f"{status_icon} **{idx}. {file_name}** - {alarm_count} alarm(s)",
-                         expanded=(alarm_count > 0 and idx <= start_idx + 3)):
-
+        # Expandable card
+        with st.expander(
+                f"{status_icon} **{idx}. {subject}** - {alarm_count} alarm(s)",
+                expanded=(alarm_count > 0 and idx <= start_idx + 3)
+        ):
             if alarm_count == 0:
-                st.success("✨ All checks passed, no alarms!")
+                st.success("✨ All quality checks passed!")
             else:
-                st.error(f"Detected {alarm_count} alarm(s):")
+                st.error(f"⚠️ Detected {alarm_count} issue(s):")
 
-                # Display grouped by category
+                # Group alarms by category
                 alarm_by_category = {}
                 for category, description in result['alarms']:
                     if category not in alarm_by_category:
@@ -399,43 +595,83 @@ else:
                     alarm_by_category[category].append(description)
 
                 for category, descriptions in alarm_by_category.items():
-                    st.markdown(f"**{category}**")
+                    st.markdown(f"**{category}:**")
                     for desc in descriptions:
                         st.markdown(f"- {desc}")
 
-            # Use toggle instead of nested expander (key fix)
+            # Detailed metrics
             st.markdown("---")
-            show_raw_data = st.toggle("📊 View Raw Data", key=f"toggle_raw_{idx}")
-            if show_raw_data:
-                data = st.session_state['check_results'][result['file_path']]['data']
+            st.markdown("**📊 Detailed Metrics:**")
+
+            data = result['data']
+
+            # Create metrics display
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.markdown("**ICA:**")
+                st.caption(f"ECG: {'✓' if data['ica']['has_ecg'] else '✗'}")
+                st.caption(f"EOG: {'✓' if data['ica']['has_eog'] else '✗'}")
+                st.caption(f"Marked: {data['ica']['marked_components']}")
+
+            with col2:
+                st.markdown("**Artifacts:**")
+                st.caption(f"Bad Channels: {data['artifacts']['bad_channels']}/{data['artifacts']['total_channels']}")
+                st.caption(f"Bad Segments: {data['artifacts']['bad_segments']}")
+
+            with col3:
+                st.markdown("**Coregistration:**")
+                if data['coregistration']['has_data']:
+                    st.caption(f"Mean: {data['coregistration']['dist_mean']:.2f}mm")
+                    st.caption(f"Max: {data['coregistration']['dist_max']:.2f}mm")
+                else:
+                    st.caption("No data available")
+
+            # Raw data toggle
+            if st.toggle("View Raw Data", key=f"raw_{idx}_{subject}"):
                 st.json(data)
 
-# Export report
+# Export functionality
 st.markdown("---")
-st.subheader("📥 Export Report")
+st.markdown("### 📥 Export Report")
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.write(f"Export {len(filtered_results)} file(s) based on current filter settings")
+    st.write(f"Export {len(filtered_results)} subject(s) based on current filter")
 with col2:
-    if st.button("Download CSV", type="primary", use_container_width=True):
-        df_export = pd.DataFrame([
-            {
-                'File Path': r['file_path'],
+    if st.button("📥 Download CSV", type="primary", use_container_width=True):
+        # Prepare export data
+        export_data = []
+        for r in filtered_results:
+            data = r['data']
+            export_data.append({
+                'Subject': r['subject'],
+                'Status': 'Passed' if r['alarm_count'] == 0 else 'Failed',
                 'Alarm Count': r['alarm_count'],
-                'Status': 'Passed' if r['alarm_count'] == 0 else 'Alarms',
+                'ICA ECG': '✓' if data['ica']['has_ecg'] else '✗',
+                'ICA EOG': '✓' if data['ica']['has_eog'] else '✗',
+                'ICA Marked': data['ica']['marked_components'],
+                'Bad Channels': data['artifacts']['bad_channels'],
+                'Bad Segments': data['artifacts']['bad_segments'],
+                'Coreg Mean (mm)': f"{data['coregistration']['dist_mean']:.2f}" if data['coregistration'][
+                    'has_data'] else 'N/A',
+                'Coreg Max (mm)': f"{data['coregistration']['dist_max']:.2f}" if data['coregistration'][
+                    'has_data'] else 'N/A',
                 'Alarm Details': '; '.join([f"[{cat}] {desc}" for cat, desc in r['alarms']])
-            }
-            for r in filtered_results
-        ])
+            })
+
+        df_export = pd.DataFrame(export_data)
         csv = df_export.to_csv(index=False, encoding='utf-8-sig')
+
         st.download_button(
-            label="📥 Export Complete Report (CSV)",
+            label="💾 Download Complete Report",
             data=csv,
-            file_name="meg_report_check.csv",
+            file_name=f"meg_quality_summary_{len(filtered_results)}_subjects.csv",
             mime="text/csv",
             use_container_width=True
         )
 
-
-
+# Footer
+st.markdown("---")
+st.caption(f"📁 Report Directory: `{report_root_dir}`")
+st.caption(f"⏰ Last updated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
