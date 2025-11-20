@@ -268,11 +268,7 @@ print("selected directory: ", selected_dir)
 image_dir = os.path.join(ica_report_dir, selected_dir, 'ica_results')
 MARKED_FILE = os.path.join(ica_report_dir, selected_dir, "marked_components.txt")
 print("MARKED_FILE:", MARKED_FILE)
-
-# ECG & EOG Scores
 ecg_eog_score_file = os.path.join(ica_report_dir, selected_dir, "ecg_eog_scores.json")
-with open(ecg_eog_score_file, 'r', encoding='utf-8') as f:
-    ecg_eog_scores = json.load(f)
 
 # Streamlit title
 st.markdown('<h2 class="main-header">🧠 Interactive ICA Component Viewer/Marker</h2>', unsafe_allow_html=True)
@@ -292,7 +288,19 @@ if "marked_components" not in st.session_state:
             st.session_state["marked_components"] = [int(line.strip()) for line in f.readlines()]
     else:
         st.session_state["marked_components"] = []
-
+if 'ecg_eog_scores' not in st.session_state:
+    # ECG & EOG Scores
+    if os.path.exists(ecg_eog_score_file):
+        with open(ecg_eog_score_file, 'r', encoding='utf-8') as f:
+            ecg_eog_scores = json.load(f)
+        st.session_state['ecg_eog_scores'] = ecg_eog_scores
+    else:
+        st.session_state['ecg_eog_scores'] = {
+            'ecg_indices': [],
+            'eog_indices': [],
+            'ecg': [],
+            'eog': []
+        }
 if st.session_state["last_selected_dir"] != selected_dir:
     st.session_state["ica_component"] = 0
     st.session_state["source_group"] = 0
@@ -356,14 +364,14 @@ else:
             current_eog_score = None
             current_ecg_score = None
             try:
-                if component_idx in ecg_eog_scores['ecg_indices']:
-                    pos = ecg_eog_scores['ecg_indices'].index(component_idx)
-                    current_ecg_score = ecg_eog_scores['ecg'][pos]
+                if component_idx in st.session_state['ecg_eog_scores']['ecg_indices']:
+                    pos = st.session_state['ecg_eog_scores']['ecg_indices'].index(component_idx)
+                    current_ecg_score = st.session_state['ecg_eog_scores']['ecg'][pos]
 
-                if component_idx in ecg_eog_scores['eog_indices']:
-                    pos = ecg_eog_scores['eog_indices'].index(component_idx)
-                    if ecg_eog_scores['eog']:
-                        current_eog_score = ecg_eog_scores['eog'][pos]
+                if component_idx in st.session_state['ecg_eog_scores']['eog_indices']:
+                    pos = st.session_state['ecg_eog_scores']['eog_indices'].index(component_idx)
+                    if st.session_state['ecg_eog_scores']['eog']:
+                        current_eog_score = st.session_state['ecg_eog_scores']['eog'][pos]
                     else:
                         current_eog_score = 0.5
             except Exception as e:
@@ -434,14 +442,22 @@ else:
                         if current_topo["component"] not in st.session_state["marked_components"]:
                             st.session_state["marked_components"].append(current_topo["component"])
                             st.session_state["marked_types"].append("ecg")  # Record ECG type
+                            if current_topo["component"] not in st.session_state['ecg_eog_scores']['ecg_indices']:
+                                st.session_state['ecg_eog_scores']['ecg_indices'].append(current_topo["component"])
+                                # For ECG,
+                                st.session_state['ecg_eog_scores']['ecg'].append(1.0)
                             st.toast(f"✅ Component {current_topo['component']} marked as ECG.")
                 with m_col3:
                     if st.button("Mark as EOG", use_container_width=True):
                         if current_topo["component"] not in st.session_state["marked_components"]:
                             st.session_state["marked_components"].append(current_topo["component"])
                             st.session_state["marked_types"].append("eog")  # Record EOG type
+                            if current_topo["component"] not in st.session_state['ecg_eog_scores']['eog_indices']:
+                                st.session_state['ecg_eog_scores']['eog_indices'].append(current_topo["component"])
+                                # For EOG
+                                st.session_state['ecg_eog_scores']['eog'].append(1.0)
                             st.toast(f"✅ Component {current_topo['component']} marked as EOG.")
-
+            print("ecg_eog_scores:sssss",st.session_state['ecg_eog_scores'])
             # Marked components section
             st.markdown(
                 "<hr style='margin: 40px 0; border: none; height: 2px; background: linear-gradient(90deg, transparent, #667eea, transparent);'>",
@@ -476,6 +492,27 @@ else:
                                 st.rerun()
 
                             if st.button(f"🗑️ Delete", key=f"delete_{comp}", use_container_width=True):
+                                # st.session_state["marked_components"].remove(comp)
+
+                                # Remove from marked types if it exists
+                                index_to_remove = None
+
+                                # Find and remove the corresponding type
+                                for idx, (m_comp, m_type) in enumerate(
+                                        zip(st.session_state["marked_components"], st.session_state["marked_types"])):
+                                    if m_comp == comp:
+                                        st.session_state["marked_types"].pop(idx)
+                                        break  # Found and removed the corresponding type
+                                # Update existing scores
+                                if comp in st.session_state['ecg_eog_scores']['ecg_indices']:
+                                    idx = st.session_state['ecg_eog_scores']['ecg_indices'].index(comp)
+                                    st.session_state['ecg_eog_scores']['ecg_indices'].pop(idx)
+                                    st.session_state['ecg_eog_scores']['ecg'].pop(idx)  # Remove corresponding ECG score
+                                elif comp in st.session_state['ecg_eog_scores']['eog_indices']:
+                                    idx = st.session_state['ecg_eog_scores']['eog_indices'].index(comp)
+                                    st.session_state['ecg_eog_scores']['eog_indices'].pop(idx)
+                                    st.session_state['ecg_eog_scores']['eog'].pop(idx)  # Remove corresponding EOG score
+
                                 st.session_state["marked_components"].remove(comp)
                                 st.success(f"✅ Component {comp} removed.")
                                 st.rerun()
@@ -495,22 +532,8 @@ else:
                     with open(MARKED_FILE, "w") as f:
                         f.write("\n".join(map(str, sorted(st.session_state["marked_components"]))))
 
-                    # Update the JSON file with marked ECG and EOG components
-                    marked_scores = {
-                        'ecg_indices': [idx for idx, comp in
-                                        zip(st.session_state["marked_components"], st.session_state["marked_types"]) if
-                                        comp == 'ecg'],
-                        'eog_indices': [idx for idx, comp in
-                                        zip(st.session_state["marked_components"], st.session_state["marked_types"]) if
-                                        comp == 'eog'],
-                        'ecg': [1.0] * len(st.session_state["marked_components"]),
-                        # Example scores, replace with your logic.
-                        'eog': [1.0] * len(st.session_state["marked_components"])
-                        # Example scores, replace with your logic.
-                    }
-
                     with open(ecg_eog_score_file, "w") as json_file:
-                        json.dump(marked_scores, json_file, indent=4)
+                        json.dump(st.session_state['ecg_eog_scores'], json_file, indent=4)
 
                     st.markdown(
                         f'<div class="success-msg">✅ Successfully saved {len(st.session_state["marked_components"])} marked components to:<br><code>{MARKED_FILE}</code></div>',

@@ -1,0 +1,62 @@
+# !/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import os
+import numpy as np
+import pandas as pd
+import streamlit as st
+from stpyvista import stpyvista
+from stpyvista.utils import start_xvfb
+import pyvista as pv
+import mne
+import altair as alt
+from pathlib import Path
+from reports.utils import in_docker
+
+# --- 1. 设置环境变量 (在无头环境中避免 GLSL 错误) ---
+os.environ["MESA_GLSL_VERSION_OVERRIDE"] = "150"
+os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.2"
+
+# 如果在无头环境，需要指定 DISPLAY
+# virtual GUI |
+# Xvfb :99 -screen 0 1920x1080x24 &
+os.environ["DISPLAY"] = ":99"
+
+# --- 启动虚拟显示 (Xvfb) ---
+if "IS_XVFB_RUNNING" not in st.session_state:
+    start_xvfb()
+    st.session_state.IS_XVFB_RUNNING = True
+
+st.title("MNE Source Localization")
+
+if in_docker():
+    report_root_dir = Path("/output")
+else:
+    report_root_dir = Path(st.session_state.get("dataset_report_path"))
+
+source_recon_report_dir = report_root_dir / "preprocessed" / "source_recon"
+
+source_report_dir = st.sidebar.text_input(
+    "Source Recon Report Directory:",
+    value=str(source_recon_report_dir)
+)
+
+if os.path.exists(source_report_dir):
+    image_dirs = sorted([f for f in os.listdir(source_report_dir) if os.path.isdir(os.path.join(source_report_dir, f))])
+else:
+    image_dirs = []
+
+selected_dir = st.sidebar.selectbox("Select a MEG File:", image_dirs)
+
+selected_ori = st.sidebar.radio("Select Brain Hemisphere:", ["Left Hemisphere (lh)", "Right Hemisphere (rh)"])
+
+ori_suffix = "lh" if "Left" in selected_ori else "rh"
+
+if selected_dir:
+    source_imaging = Path(source_report_dir) / selected_dir / f"wdonset_evoked_dSPM-ico4-{ori_suffix}.png"
+
+    if source_imaging.exists():
+        st.image(source_imaging, use_container_width=True)
+    else:
+        st.warning(f"Image not found: {source_imaging}")
+else:
+    st.info("Please select a MEG File.")
