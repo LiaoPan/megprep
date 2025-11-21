@@ -20,7 +20,7 @@ mne.viz.set_browser_backend("matplotlib")
 
 # set report root dir.
 report_root_dir = st.session_state.get("dataset_report_path")
-DATA_DIR = os.path.join(report_root_dir, "process_1")
+DATA_DIR = os.path.join(report_root_dir, "preprocessed","artifact_report")
 print("DATA_DIR:", DATA_DIR)
 
 CONFIG = {
@@ -44,9 +44,8 @@ def load_bad_segments(bad_segments_file):
     return annotations
 
 
-def get_plot_path(plot_dir, subject_dir, onset_time, channel_group=0, plot_type="waveform"):
-    """获取预生成图片的路径"""
-    plots_dir = Path(plot_dir) / "check_imgs" / subject_dir / plot_type / f"chn.{channel_group}"
+def get_plot_path(plot_dir, onset_time, channel_group=0, plot_type="waveform"):
+    plots_dir = Path(plot_dir) / plot_type / f"chn.{channel_group}"
 
     if plot_type == "waveform":
         filename = f"seg_{onset_time:.3f}.jpg"
@@ -480,10 +479,10 @@ with st.sidebar:
     subdirectories = sorted(os.listdir(DATA_DIR))
     selected_dir = st.sidebar.selectbox("Select Dataset:", options=subdirectories, index=0)
     full_path = os.path.join(DATA_DIR, selected_dir)
-    check_plot_dataset_dir = os.path.join(report_root_dir, "process_2", selected_dir)
+    check_plot_dataset_dir = os.path.join(DATA_DIR, selected_dir)
 
     if not os.path.exists(check_plot_dataset_dir):
-        st.error(f"⚠️ Checl Plot directory not found: {check_plot_dataset_dir}")
+        st.error(f"⚠️ Check Plot directory not found: {check_plot_dataset_dir}")
         st.stop()
 
     files = sorted(
@@ -491,12 +490,12 @@ with st.sidebar:
             os.path.join(root, f)
             for root, dirs, _files in os.walk(full_path)
             for f in _files
-            if f.endswith("_preprocessed.fif")
+            if f.endswith("_bad_segments.txt")
         ]
     )
 
     if not files:
-        st.warning("⚠️ No .fif files found")
+        st.warning("⚠️ No files found")
 
     if "filter_keyword" not in st.session_state:
         st.session_state.filter_keyword = ""
@@ -536,8 +535,7 @@ with st.sidebar:
         # origin_raw = mne.io.read_raw_fif(file_path, preload=False)
         # print("debug reading origin raw:",origin_raw,origin_raw.filenames[0])
         subject_id_dir = Path(selected_file).parent.name
-        subject_id = Path(selected_file).stem.replace("_preprocessed", "")
-        check_plots_dir = Path(check_plot_dataset_dir) / "check_imgs" / subject_id
+        check_plots_dir = Path(check_plot_dataset_dir) / "check_imgs"
         check_plots_waveformdir = check_plots_dir / "waveform"
         check_plots_overviewdir = check_plots_dir / "overview"
         chn_info_jl = Path(check_plots_waveformdir) / "channels.jl"
@@ -561,10 +559,11 @@ with st.sidebar:
         total_duration = last_time - first_time
 
         # 加载数据
-        artifact_dir = Path(report_root_dir) / "process_2" / subject_id_dir
-        bad_segments_file = artifact_dir / f"{Path(selected_file).stem.replace('_preprocessed', '')}_bad_seg.txt"
-        bad_channels_file = artifact_dir / f"{Path(selected_file).stem.replace('_preprocessed', '')}_bad_chn.txt"
-
+        artifact_dir = Path(DATA_DIR) / subject_id_dir
+        selected_file_stem = Path(selected_file).stem.replace("_bad_segments", "")
+        bad_segments_file = artifact_dir / f"{selected_file_stem}_bad_segments.txt"
+        bad_channels_file = artifact_dir / f"{selected_file_stem}_bad_channels.txt"
+        print("bad_segments_file:",bad_segments_file)
         if not bad_segments_file.exists():
             st.error("bad segment file is not exists...")
         else:
@@ -670,7 +669,7 @@ with st.sidebar:
                     st.rerun()
 
         # Artifact Navigation
-        with st.expander("🔴 Artifacts", expanded=True):
+        with st.expander("🔴 Segments", expanded=True):
             st.caption(f"Total: {len(available_onsets)}")
 
             col1, col2 = st.columns(2)
@@ -732,8 +731,7 @@ if selected_file:
 
             # Load and display the overview image
             overview_path = get_plot_path(
-                check_plot_dataset_dir,
-                subject_id,
+                check_plots_dir,
                 available_onsets_overview[st.session_state.current_overview_index],
                 plot_type="overview",
             )
@@ -796,7 +794,7 @@ if selected_file:
                 )
 
                 # Display the combined figure
-                st.plotly_chart(combined_fig, use_container_width=True)
+                st.plotly_chart(combined_fig, width='stretch')
 
         st.markdown("---")
 
@@ -808,9 +806,7 @@ if selected_file:
 
     current_channels = get_current_channels(chn_info_jl, st.session_state.current_channel_group)
     annotations_orig_time = get_info_dict(chn_info_jl, "raw.annotations.orig_time")
-    waveform_path = get_plot_path(
-        check_plot_dataset_dir, subject_id, current_onset, st.session_state.current_channel_group, "waveform"
-    )
+    waveform_path = get_plot_path(check_plots_dir,current_onset, st.session_state.current_channel_group, "waveform")
     if waveform_path:
         try:
             bad_segments_list = []

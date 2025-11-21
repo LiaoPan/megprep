@@ -14,15 +14,20 @@ import os
 import mne
 import argparse
 import yaml
-
+import logging
+from pathlib import Path
 from osl_ephys.preprocessing.osl_wrappers import detect_badchannels, detect_badsegments
 # from tools.osl.osl_wrappers import detect_badchannels, detect_badsegments
 from mne.preprocessing import annotate_break,annotate_amplitude,annotate_muscle_zscore
 from mne.preprocessing import find_bad_channels_lof
 from tools.pyprep.find_noisy_channels import NoisyChannels
-from utils import set_random_seed
+from utils import set_random_seed,plot_snippets
 
 set_random_seed(2025)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 def find_bad_channels(raw,config):
     """Detect bad channels using multiple methods."""
@@ -84,9 +89,9 @@ def find_bad_channels(raw,config):
         try:
             detect_badchannels(_raw, picks='grad', **osl_config)
         except Exception as e:
-            print(e)
+            logger.error(e)
         bad_channels.extend(_raw.info["bads"])
-        print("osl bad channels:", _raw.info["bads"])
+        logger.info(f'osl bad channels: {_raw.info["bads"]}')
 
     # MNE methods
     mne_config = config.get("mne", None)
@@ -96,9 +101,9 @@ def find_bad_channels(raw,config):
             _raw.info["bads"] = []
             find_bad_channels_lof(_raw, **mne_config.get('find_bad_channels_lof',{}))
             bad_channels.extend(_raw.info["bads"])
-            print("mne bad channels:", _raw.info["bads"])
+            logger.info(f'mne bad channels: {_raw.info["bads"]}')
         except Exception as e:
-            print(e)
+            logger.error(e)
     del _raw
     return bad_channels
 
@@ -111,7 +116,7 @@ def find_bad_segments(raw, config):
         try:
             raw_bad_segments = detect_badsegments(raw, picks='grad', segment_len=segment_len, detect_zeros=True)
         except Exception as e:
-            print(e)
+            logger.error(e)
             raw_bad_segments = raw
 
         raw_bad_segments = detect_badsegments(raw_bad_segments, picks='mag', segment_len=segment_len, ref_meg=False, detect_zeros=True)
@@ -124,7 +129,7 @@ def find_bad_segments(raw, config):
                 annot_muscle, scores_muscle = annotate_muscle_zscore(raw,**mne_config.get("annotate_muscle_zscore"))
                 annots = annots + annot_muscle
             if mne_config.get("annotate_break"):
-                print("debug :::,",mne_config.get("annotate_break"))
+                logger.info(mne_config.get("annotate_break"))
                 annot_break = mne.preprocessing.annotate_break(raw=raw,**mne_config.get("annotate_break"))
                 annots = annots + annot_break
             if mne_config.get("annotate_amplitude"):
@@ -132,10 +137,10 @@ def find_bad_segments(raw, config):
                 annots = annots + annot_amplitude
             raw.set_annotations(annots)
         except Exception as e:
-            print(e)
+            logger.error(e)
     return raw
 def main(args):
-    print("args.input:", args.input)
+    logger.info("args.input:", args.input)
 
     # Parse YAML configuration
     config = yaml.safe_load(args.config)
@@ -145,7 +150,7 @@ def main(args):
     output_bad_channels_file = f"{args.output}/{base_name}_bad_channels.txt"
 
     if os.path.exists(output_bad_segments_file) and os.path.exists(output_bad_channels_file):
-        print(f"The file {output_bad_segments_file}/{output_bad_channels_file} already exists, and the data will not be overwritten.")
+        logger.info(f"The file {output_bad_segments_file}/{output_bad_channels_file} already exists, and the data will not be overwritten.")
     else:
         # raw = mne.io.read_raw_fif(args.input, preload=True)
         raw = mne.io.read_raw(args.input, preload=True)
@@ -155,7 +160,7 @@ def main(args):
         raw.info['bads'].extend(bad_channels)
         current_bad_channels = set(raw.info['bads'])
         raw.info['bads'] = list(current_bad_channels)
-        print("raw.info['bads']:",raw.info['bads'])
+        logger.info(f"raw.info['bads']:{raw.info['bads']}")
 
         # Detect bad segments
         raw = find_bad_segments(raw,config['find_bad_segments'])
@@ -165,17 +170,58 @@ def main(args):
 
         # Save results
         raw.annotations.save(output_bad_segments_file, overwrite=True)
-        print("raw.annotations[bad segments]:",raw.annotations)
+        logger.info(f"raw.annotations[bad segments]:{raw.annotations}")
 
         with open(output_bad_channels_file, 'w') as f:
             for bad_channel in bad_channels:
                 f.write(f"{bad_channel}\n")
         try:
             if args.annot and (raw.info['bads'] or raw.annotations):
-                print(f"Adding artifact information into {args.input}")
+                logger.info(f"Adding artifact information into {args.input}")
                 raw.save(f"{args.input}", overwrite=True)
         except Exception as e:
-            print(f"Error overwriting:{args.input}...,\n {e}")
+            logger.error(f"Error overwriting:{args.input}...,\n {e}")
+
+        # Generate artifacts check images.
+        if config.get('artifact_images_enabled',True):
+            device_type = config.get('meg_vendor','')
+            check_imgs_output_dir = Path(output_bad_channels_file).parent / "check_imgs"
+            seg_fname_img_out = Path(f"{check_imgs_output_dir}/waveform/chn.#/seg_$.jpg")
+            seg_fname_chn_out = Path(f"{check_imgs_output_dir}/waveform/channels.jl")
+            summary_fname_img_out = Path(f"{check_imgs_output_dir}/overview/chn.#/seg_$.jpg")
+            summary_fname_chn_out = Path(f"{check_imgs_output_dir}/overview/channels.jl")
+            try:
+                logger.info("Generating summary anv waveform...")
+                # plot segments
+                plot_snippets(
+                    fname_fif=args.input,
+                    fname_bad_chn=output_bad_channels_file,
+                    fname_bad_seg=output_bad_segments_file,
+                    fname_img_out=seg_fname_img_out,
+                    fname_chn_out=seg_fname_chn_out,
+                    device_type=device_type,
+                    segment_type="segment",
+                    n_chans=30,
+                    duration=60,
+                    n_jobs=-1,
+                )
+
+                # plot summary
+                plot_snippets(
+                    fname_fif=args.input,
+                    fname_bad_chn=output_bad_channels_file,
+                    fname_bad_seg=output_bad_segments_file,
+                    fname_img_out=summary_fname_img_out,
+                    fname_chn_out=summary_fname_chn_out,
+                    device_type=device_type,
+                    segment_type="summary",
+                    duration=200,
+                    n_jobs=-1,
+                )
+            except Exception as e:
+                logger.error(e)
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Artifact Detection for MEG Data")
@@ -208,6 +254,8 @@ if __name__ == "__main__":
     #                 ch_type: mag
     #                 threshold: 12
     #
+    #     artifact_images_enabled: true
+    #     meg_vendor: '' # 'ctf', 'elekta', '4d', 'kit', 'opm', ''
     # """
 
     main(args)

@@ -168,8 +168,6 @@ def save_raw_list_to_file(raw_list: List[str], output_file: str):
 if __name__ == "__main__":
     # Example usage
     # dataset_dir = "/path/to/dataset"
-    # /data/liaopan/datasets/MEG-MASC/
-    # /data/liaopan/datasets/Holmes_cn/raw
     # # Read BIDS format dataset
     # raw_data_bids = read_meg_dataset(dataset_dir, dataset_format='bids', print_dir=True, bids_report=True)
     # print(f"Loaded {len(raw_data_bids)} MEG datasets from BIDS.")

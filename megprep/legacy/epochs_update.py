@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Script to generate epochs from raw MEG data and save rejected epochs info.
+"""
+
+import os
+import mne
+import re
+import argparse
+import numpy as np
+import pandas as pd
+from scipy.io import loadmat
+import yaml
+from collections import defaultdict
+from pathlib import Path
+import matplotlib.pyplot as plt
+mne.viz.set_browser_backend('matplotlib')
+
+def plot_epochs(epochs, subj_tag, subj_path):
+    """
+    Generate and save plots for the epochs data.
+    """
+    subj_tag = Path(subj_tag).stem
+    fig = epochs.plot_sensors(kind="3d", ch_type="all")
+    fig.savefig(os.path.join(subj_path, f"{subj_tag}_epoch_onset_sensors_3d.png"), dpi=100)
+    fig.clf()
+
+    fig = epochs.plot_sensors(kind="topomap", ch_type="all")
+    fig.savefig(os.path.join(subj_path, f"{subj_tag}_epoch_onset_sensors_2d.png"), dpi=100)
+    fig.clf()
+
+    fig = epochs.compute_psd().plot(picks="mag", exclude="bads")
+    fig.savefig(os.path.join(subj_path, f"{subj_tag}_epoch_onset_psd.png"), dpi=100)
+    fig.clf()
+
+    evokeds = epochs.average(picks='mag')
+    times = np.arange(-0.1, 0.601, 0.1)
+    fig = evokeds.plot_topomap(times, ch_type="mag")
+    fig.savefig(os.path.join(subj_path, f"{subj_tag}_epoch_onset_topo_mag.png"), dpi=100)
+    fig.clf()
+
+
+def read_bids_events(events_file):
+    """
+    Read events from a BIDS formatted events file.
+
+    Parameters
+    ----------
+    events_file : str
+        Path to the events file in BIDS format.
+
+    Returns
+    -------
+    events : ndarray, shape (n_events, 3)
+        Array of events to be used with MNE.
+    """
+    events = []
+
+    with open(events_file, 'r') as f:
+        header = f.readline()
+        for line in f:
+            if line.strip():
+                onset, duration, trial_type, value, sample = line.split()
+                onset = float(onset)
+                if int(value) not in (0, -1):
+                    events.append([int(onset * 1000), 0, int(value)])
+
+    return np.array(events, dtype=int)
+
+def epochs(subj_data_file,output_epoch_file, output_dir, events_file, config):
+    """
+    Process each subject and session to generate epochs and handle rejection logs.
+    """
+
+    # Load raw data
+    raw = mne.io.read_raw_fif(subj_data_file)
+
+    # Extract parameters from config
+    task_type = config.get('task_type', 'task')
+    subj_tag = os.path.basename(subj_data_file)
+
+    event_source = config.get('event_source', 'find_events')
+
+    if task_type == 'resting':
+        fixed_length_duration = config.get('resting', {}).get('fixed_length_duration', 2.0)
+        print("Resting Epochs, fixed length duration: {}".format(fixed_length_duration))
+        events = mne.make_fixed_length_events(raw, id=1, duration=fixed_length_duration)
+        epochs_data = mne.Epochs(raw=raw, events=events, **config.get('epochs'))
+    elif task_type == 'task':
+        if event_source == 'find_events':
+            events = mne.find_events(raw, **config.get('find_events'))
+            epochs_data = mne.Epochs(raw=raw, events=events, **config.get('epochs'))
+        else:
+            # According to the event file to generate epochs (in BIDS format)
+            # events = mne.read_events(events_file)
+            print("Load bids events file from {}".format(events_file))
+            events = read_bids_events(events_file)
+            print("bids events:\n", events)
+            epochs_data = mne.Epochs(raw=raw, events=events, **config.get('epochs'))
+    else:
+        raise ValueError("Unknown task_type specified in the config. Use 'resting' or 'task'.")
+
+    # Save epochs and plots
+    epochs_data.save(os.path.join(output_dir, output_epoch_file), overwrite=True)
+
+    reject_epochs_id_file = os.path.join(output_dir, f"{Path(subj_tag).stem}_reject_epoch_log.txt")
+    save_rejected_epochs(epochs_data, subj_tag, reject_epochs_id_file)
+
+    plot_epochs(epochs_data, subj_tag, output_dir)
+
+
+def save_rejected_epochs(epochs, subj_tag, reject_epochs_id_file):
+    """
+    Save the rejected epochs and update the rejection log.
+    """
+    # Initialize dictionary for rejected epochs
+    rejected_epochs_dict = defaultdict(lambda: defaultdict(list))
+
+    rejected_epochs_ids = [i for i, reason in enumerate(epochs.drop_log) if reason]
+    rejected_epochs_dict[f"{subj_tag}"] = rejected_epochs_ids
+    num_epochs = len(epochs)
+
+    with open(reject_epochs_id_file, 'w') as file:
+        for subject,epoch_id in rejected_epochs_dict.items():
+            file.write(f"{epoch_id}\n")
+        file.write(f"num_epochs:{num_epochs}")
+    print(f"Rejected epochs data has been saved to {reject_epochs_id_file}")
+
+
+
+def parse_arguments():
+    """
+    Parse command line arguments.
+    """
+    parser = argparse.ArgumentParser(description="Generate epochs from raw MEG data and save rejected epochs info.")
+    parser.add_argument('--preproc_raw_file', type=str, required=True, help="")
+    parser.add_argument('--events_file', type=str, default="", help="Path to the events.tsv file. (BIDS)")
+    parser.add_argument('--output_epoch_file', type=str, default="epoch-epo.fif", help="")
+    parser.add_argument('--output_dir', type=str, default=".", help="")
+    parser.add_argument('--config', type=str,  default="{}", help="YAML configuration string for epochs")
+
+    return parser.parse_args()
+
+def main():
+    # Parse command-line arguments
+    args = parse_arguments()
+
+    # handle scientific notation.
+    loader = yaml.SafeLoader
+    loader.add_implicit_resolver(
+        u'tag:yaml.org,2002:float',
+        re.compile(u'''^(?:
+         [-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+]?[0-9]+)?
+        |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
+        |\\.[0-9_]+(?:[eE][-+][0-9]+)?
+        |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*
+        |[-+]?\\.(?:inf|Inf|INF)
+        |\\.(?:nan|NaN|NAN))$''', re.X),
+        list(u'-+0123456789.'))
+
+    # # debug
+    # epoch_config = """
+    #     task_type: 'task'   # or 'resting'
+    #     event_source: 'find_events'  # or 'find_events'
+    #
+    #     resting:
+    #         fixed_length_duration: 2.0
+    #
+    #     # find events
+    #     find_events:
+    #         stim_channel: null
+    #         shortest_event: 1
+    #         min_duration: 0.0
+    #
+    #     epochs:
+    #         event_id: null
+    #         tmin: -0.2
+    #         tmax: 1
+    #         reject_by_annotation: false
+    #         picks: meg
+    #         baseline: null
+    #         reject:
+    #             grad: 4000e-13
+    #             mag: 4e-12
+    #         preload: true
+    #         detrend: null
+    # """
+    # args.config = epoch_config
+
+    # Parse YAML configuration
+    config = yaml.safe_load(args.config)
+    print(config)
+    epochs(args.preproc_raw_file, args.output_epoch_file, args.output_dir, args.events_file, config)
+
+
+if __name__ == "__main__":
+    main()

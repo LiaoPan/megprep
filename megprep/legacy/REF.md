@@ -8,6 +8,9 @@ https://github.com/mne-tools/mne-bids-pipeline
 $ pip install --upgrade mne-bids-pipeline
 
 
+
+mne_bids 源码修改位置：path.py line1346 _get_matching_bidspaths_from_filesystem(self)
+
 pyprep runs on Python version 3.9 or higher.
 $ pip install --upgrade pyprep | 不能直接使用，需要改造。
 
