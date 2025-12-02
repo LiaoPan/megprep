@@ -143,7 +143,7 @@ st.sidebar.markdown("### 📂 Select Data")
 selected_dir = st.sidebar.selectbox("Select a MEG File:", filtered_dirs)
 # st.sidebar.markdown(f"**Current Selection:** `{selected_dir}`")
 st.sidebar.markdown("---")
-st.sidebar.info("💡 Select a subject to view their coregistration results")
+# st.sidebar.info("💡 Select a subject to view their coregistration results")
 
 coreg_dir = coreg_report_dir / selected_dir
 
@@ -173,43 +173,106 @@ st.markdown('<div class="section-header">Coregistration Visualization</div>', un
 # Define image display information with keywords
 # Note: Order matters! More specific keywords should come first
 image_info = {
-    "coreg_icp_finetune": {
-        "title": "4️⃣ ICP Fine-tuned",
-        "desc": "Final result after ICP fine-tuning"
-    },
-    "coreg_icp": {
-        "title": "3️⃣ ICP Registration",
-        "desc": "Iterative Closest Point algorithm registration result"
+    "coreg_initial": {
+        "title": "1️⃣ Initial Position",
+        "desc": "Initial coregistration position"
     },
     "coreg_fiducials": {
         "title": "2️⃣ Fiducials",
         "desc": "Fiducial-based alignment"
     },
-    "coreg_initial": {
-        "title": "1️⃣ Initial Position",
-        "desc": "Initial coregistration position"
-    }
+    "coreg_icp": {
+        "title": "3️⃣ ICP Registration",
+        "desc": "Iterative Closest Point algorithm registration result"
+    },
+    "coreg_icp_finetune": {
+        "title": "4️⃣ ICP Fine-tuned",
+        "desc": "Final result after ICP fine-tuning"
+    },
 }
 
-# Display images in original glob order with enhanced information
-for img in coreg_dir.glob("*.png"):
-    img_name = img.name
+# Configuration: Naming Convention
+# 1. With Scalp (Left): e.g., sub-01_coreg_initial.png
+# 2. Without Scalp (Right): e.g., sub-01_coreg_initial_brain.png
 
-    # Check if any keyword matches the filename
-    matched = False
-    for keyword, info in image_info.items():
-        if keyword in img_name:
-            st.markdown(f'''
-            <div class="step-card">
-                <div class="step-title">{info["title"]}</div>
-                <div class="step-description">{info["desc"]}</div>
-            </div>
-            ''', unsafe_allow_html=True)
-            matched = True
-            break
 
-    if not matched:
-        st.markdown(f"**{img_name}**")
+NO_SCALP_SUFFIX = "_brain"
+processed_files = set()
+all_pngs = list(coreg_dir.glob("*.png"))
 
-    st.image(img, use_container_width=True)
+for keyword, info in image_info.items():
+
+    # 1. Find all files belonging to the current step
+    step_files = []
+    for img_path in all_pngs:
+        fname = img_path.name
+        if keyword in fname:
+            # Prevention: Ensure we don't match a longer keyword
+            # (e.g. prevent 'coreg_icp' from matching 'coreg_icp_finetune')
+            is_more_specific = False
+            for other_key in image_info.keys():
+                if other_key != keyword and len(other_key) > len(keyword) and other_key in fname:
+                    is_more_specific = True
+                    break
+
+            if not is_more_specific:
+                step_files.append(img_path)
+
+    if not step_files:
+        continue
+
+    # Mark files as processed
+    for f in step_files:
+        processed_files.add(f.name)
+
+    # 2. Identify Left (Scalp) and Right (Brain/No Scalp) images based on suffix
+    img_scalp = None  # Standard view
+    img_noscalp = None  # Brain view
+
+    for f in step_files:
+        if NO_SCALP_SUFFIX in f.name:
+            img_noscalp = f
+        else:
+            # If it doesn't have the specific suffix, treat it as the standard scalp image
+            img_scalp = f
+
+    # 3. Display the Step Card
+    st.markdown(f'''
+    <div class="step-card">
+        <div class="step-title">{info["title"]}</div>
+        <div class="step-description">{info["desc"]}</div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    # 4. Display images side-by-side
+    cols = st.columns(2)
+
+    # --- Left Column: With Scalp ---
+    with cols[0]:
+        st.markdown(
+            "<div style='text-align: center; color: #666; margin-bottom: 5px; font-size: 0.9em;'><b>With Scalp (Head)</b></div>",
+            unsafe_allow_html=True)
+        if img_scalp:
+            st.image(img_scalp, use_container_width=True)
+        else:
+            st.warning("Standard image not found")
+
+    # --- Right Column: Without Scalp ---
+    with cols[1]:
+        st.markdown(
+            f"<div style='text-align: center; color: #666; margin-bottom: 5px; font-size: 0.9em;'><b>Without Scalp (Brain Surface)</b></div>",
+            unsafe_allow_html=True)
+        if img_noscalp:
+            st.image(img_noscalp, use_container_width=True)
+        else:
+            # Info message if the specific suffix image is missing
+            st.info(f"Brain view ({NO_SCALP_SUFFIX}) not available")
+
     st.markdown("---")
+
+# (Optional) Display uncategorized images
+for img in all_pngs:
+    if img.name not in processed_files:
+        st.markdown(f"**Uncategorized Image: {img.name}**")
+        st.image(img, use_container_width=True)
+        st.markdown("---")
