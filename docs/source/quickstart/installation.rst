@@ -20,13 +20,13 @@ Download MEGPrep Image
 
 .. code-block:: bash
 
-    docker pull megprep:<version>
+    docker pull cmrlab/megprep:<version>
 
 
 See the parameter description
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-docker run megprep:<version> -h
+docker run cmrlab/megprep:<version> -h
 Usage: /program/nextflow/run.sh [options]
 Options:
   -c, --config          Specify the Nextflow config file (default: nextflow.config)

@@ -128,7 +128,7 @@ def main():
     #         reject_by_annotation: true
     #
     #     covariance:
-    #         tmin: null  #Start time for baseline. If null start at first sample.
+    #         tmin: null  # Start time for baseline. If null start at first sample.
     #         tmax: null  # End time for baseline. If null end at last sample.
     #         rank: null # Rank used for covariance calculation
     # """

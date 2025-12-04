@@ -556,7 +556,7 @@ try:
     transform_df = coreg_trans['trans']
     st.dataframe(
         transform_df,
-        use_container_width=True,
+        width='stretch',
         height=200
     )
 

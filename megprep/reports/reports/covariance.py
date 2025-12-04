@@ -122,7 +122,7 @@ if image_dirs:
         if os.path.exists(bl_cov_path):
             col1, col2, col3 = st.columns([1, 10, 1])
             with col2:
-                st.image(bl_cov_path, use_container_width=True)
+                st.image(bl_cov_path, width='stretch')
         else:
             st.warning(f"⚠️ Image not found: `bl_cov.png`")
 
@@ -134,7 +134,7 @@ if image_dirs:
         if os.path.exists(bl_cov_spectra_path):
             col1, col2, col3 = st.columns([1, 10, 1])
             with col2:
-                st.image(bl_cov_spectra_path, use_container_width=True)
+                st.image(bl_cov_spectra_path, width='stretch')
         else:
             st.warning(f"⚠️ Image not found: `bl_cov_spectra.png`")
 

@@ -171,7 +171,7 @@ if selected_dir:
             # Display image in a container
             st.image(
                 image_path,
-                use_container_width=True,
+                width='stretch',
                 caption=f"{orientation.capitalize()} view - {selected_dir}"
             )
             st.markdown('</div>', unsafe_allow_html=True)

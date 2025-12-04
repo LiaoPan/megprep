@@ -20,11 +20,6 @@ DEFAULT_ICA_REPORT_DIR = report_root_dir / "preprocessed" / "ica_report"
 # Enhanced CSS styling with fixed button sizes
 enhanced_style = """
     <style>
-        /* Hide default Streamlit elements */
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        header {visibility: hidden;}
-
         /* Global styling */
         .main {
             background: linear-gradient(135deg, #f5f7fa 0%, #e8eef5 100%);
@@ -389,16 +384,16 @@ else:
                 st.image(
                     os.path.join(image_dir, current_source_filename),
                     caption=f"Source Components {current_source_start}-{current_source_end}",
-                    use_container_width=True,
+                    width='stretch',
                 )
 
                 left_col1, left_col2 = st.columns(2, gap="medium")
                 with left_col1:
-                    if st.button("Previous Sources", use_container_width=True):
+                    if st.button("Previous Sources", width='stretch'):
                         st.session_state["source_group"] = max(0, source_group_idx - 1)
                         st.rerun()
                 with left_col2:
-                    if st.button("Next Sources", use_container_width=True):
+                    if st.button("Next Sources", width='stretch'):
                         st.session_state["source_group"] = min(len(source_files) - 1, source_group_idx + 1)
                         st.rerun()
 
@@ -417,28 +412,28 @@ else:
 
                 st.image(
                     os.path.join(image_dir, current_topo_filename),
-                    use_container_width=True,
+                    width='stretch',
                 )
 
                 right_col1, right_col2  = st.columns(2, gap="small")
                 with right_col1:
-                    if st.button("Previous", use_container_width=True):
+                    if st.button("Previous", width='stretch'):
                         st.session_state["ica_component"] = max(0, component_idx - 1)
                         st.rerun()
                 with right_col2:
-                    if st.button("Next ", use_container_width=True):
+                    if st.button("Next ", width='stretch'):
                         st.session_state["ica_component"] = min(len(topo_files) - 1, component_idx + 1)
                         st.rerun()
 
                 m_col1,m_col2,m_col3 = st.columns(3, gap="small")
                 with m_col1:
-                    if st.button("Mark", use_container_width=True):
+                    if st.button("Mark", width='stretch'):
                         if current_topo["component"] not in st.session_state["marked_components"]:
                             st.session_state["marked_components"].append(current_topo["component"])
                             st.session_state["marked_types"].append("outlier") #outlier
                             st.toast(f"✅ Component {current_topo['component']} marked as artifact.")
                 with m_col2:
-                    if st.button("Mark as ECG", use_container_width=True):
+                    if st.button("Mark as ECG", width='stretch'):
                         if current_topo["component"] not in st.session_state["marked_components"]:
                             st.session_state["marked_components"].append(current_topo["component"])
                             st.session_state["marked_types"].append("ecg")  # Record ECG type
@@ -448,7 +443,7 @@ else:
                                 st.session_state['ecg_eog_scores']['ecg'].append(1.0)
                             st.toast(f"✅ Component {current_topo['component']} marked as ECG.")
                 with m_col3:
-                    if st.button("Mark as EOG", use_container_width=True):
+                    if st.button("Mark as EOG", width='stretch'):
                         if current_topo["component"] not in st.session_state["marked_components"]:
                             st.session_state["marked_components"].append(current_topo["component"])
                             st.session_state["marked_types"].append("eog")  # Record EOG type
@@ -457,7 +452,7 @@ else:
                                 # For EOG
                                 st.session_state['ecg_eog_scores']['eog'].append(1.0)
                             st.toast(f"✅ Component {current_topo['component']} marked as EOG.")
-            print("ecg_eog_scores:sssss",st.session_state['ecg_eog_scores'])
+            print("ecg_eog_scores:",st.session_state['ecg_eog_scores'])
             # Marked components section
             st.markdown(
                 "<hr style='margin: 40px 0; border: none; height: 2px; background: linear-gradient(90deg, transparent, #667eea, transparent);'>",
@@ -484,14 +479,14 @@ else:
                     cols = st.columns(len(row), gap="small")
                     for i, comp in enumerate(row):
                         with cols[i]:
-                            if st.button(f"📌 Comp {comp}", key=f"view_{comp}", use_container_width=True):
+                            if st.button(f"📌 Comp {comp}", key=f"view_{comp}", width='stretch'):
                                 st.session_state["ica_component"] = next(
                                     (idx for idx, topo in enumerate(topo_files) if topo["component"] == comp),
                                     st.session_state["ica_component"]
                                 )
                                 st.rerun()
 
-                            if st.button(f"🗑️ Delete", key=f"delete_{comp}", use_container_width=True):
+                            if st.button(f"🗑️ Delete", key=f"delete_{comp}", width='stretch'):
                                 # st.session_state["marked_components"].remove(comp)
 
                                 # Remove from marked types if it exists
@@ -528,7 +523,7 @@ else:
             st.markdown("### 💾 Save ICA Components")
             col_save1, col_save2, col_save3 = st.columns([1, 2, 1])
             with col_save2:
-                if st.button("💾 Save Marked Components", use_container_width=True):
+                if st.button("💾 Save Marked Components", width='stretch'):
                     with open(MARKED_FILE, "w") as f:
                         f.write("\n".join(map(str, sorted(st.session_state["marked_components"]))))
 

@@ -416,8 +416,15 @@ def plot_snippets(
         # duration = raw.times[-1] - raw.times[0] #edited
         n_chans = raw.info["nchan"]
 
+    # add raw info for reports.
+    raw_info = {
+        "raw.annotations.orig_time": raw.annotations.orig_time,
+        "first_time": raw.first_time,
+        "last_time": raw.last_samp / raw.info["sfreq"],
+    }
+
     if segment_type in ["segment", "summary"]:
-        raw = pad_raw_data(raw, duration)
+        raw = pad_raw_data(raw, duration) # warning: force first time=0.
 
     n_chn_old = raw.info["nchan"]
     if len(mag + grad) % n_chans != 0:
@@ -469,12 +476,6 @@ def plot_snippets(
         chn_list[chn] = [raw.ch_names[i] for i in order_list[chn * n_chans : (chn + 1) * n_chans]]
 
     fname_chn_out.parent.mkdir(parents=True, exist_ok=True)
-    # add raw info for reports.
-    raw_info = {
-        "raw.annotations.orig_time": raw.annotations.orig_time,
-        "first_time": raw.first_time,
-        "last_time": raw.last_samp / raw.info["sfreq"],
-    }
     chn_list.update(raw_info)
     jl.dump(chn_list, fname_chn_out)
 

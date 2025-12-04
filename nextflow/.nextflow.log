@@ -1,0 +1,39 @@
+Dec-04 10:55:55.678 [main] DEBUG nextflow.cli.Launcher - $> nextflow run meg_anat_pipeline_for_docker.nf -c /data/liaopan/megprep_demo/nextflow_for_cog.config
+Dec-04 10:55:55.757 [main] DEBUG nextflow.cli.CmdRun - N E X T F L O W  ~  version 24.10.3
+Dec-04 10:55:55.798 [main] DEBUG nextflow.plugin.PluginsFacade - Setting up plugin manager > mode=prod; embedded=false; plugins-dir=/home/liaopan/.nextflow/plugins; core-plugins: nf-amazon@2.9.2,nf-azure@1.10.2,nf-cloudcache@0.4.2,nf-codecommit@0.2.2,nf-console@1.1.4,nf-google@1.15.3,nf-tower@1.9.3,nf-wave@1.7.4
+Dec-04 10:55:55.828 [main] INFO  o.pf4j.DefaultPluginStatusProvider - Enabled plugins: []
+Dec-04 10:55:55.829 [main] INFO  o.pf4j.DefaultPluginStatusProvider - Disabled plugins: []
+Dec-04 10:55:55.833 [main] INFO  org.pf4j.DefaultPluginManager - PF4J version 3.12.0 in 'deployment' mode
+Dec-04 10:55:55.847 [main] INFO  org.pf4j.AbstractPluginManager - No plugins
+Dec-04 10:55:55.897 [main] DEBUG nextflow.config.ConfigBuilder - Found config local: /data/liaopan/megprep/nextflow/nextflow.config
+Dec-04 10:55:55.902 [main] DEBUG nextflow.config.ConfigBuilder - User config file: /data/liaopan/megprep_demo/nextflow_for_cog.config
+Dec-04 10:55:55.904 [main] DEBUG nextflow.config.ConfigBuilder - Parsing config file: /data/liaopan/megprep/nextflow/nextflow.config
+Dec-04 10:55:55.905 [main] DEBUG nextflow.config.ConfigBuilder - Parsing config file: /data/liaopan/megprep_demo/nextflow_for_cog.config
+Dec-04 10:55:55.941 [main] DEBUG n.secret.LocalSecretsProvider - Secrets store: /home/liaopan/.nextflow/secrets/store.json
+Dec-04 10:55:55.945 [main] DEBUG nextflow.secret.SecretsLoader - Discovered secrets providers: [nextflow.secret.LocalSecretsProvider@c827db] - activable => nextflow.secret.LocalSecretsProvider@c827db
+Dec-04 10:55:55.951 [main] DEBUG nextflow.config.ConfigBuilder - Applying config profile: `standard`
+Dec-04 10:55:56.658 [main] DEBUG nextflow.config.ConfigBuilder - Applying config profile: `standard`
+Dec-04 10:55:56.877 [main] DEBUG nextflow.cli.CmdRun - Applied DSL=2 from script declaration
+Dec-04 10:55:56.904 [main] DEBUG nextflow.cli.CmdRun - Launching `meg_anat_pipeline_for_docker.nf` [gigantic_mclean] DSL2 - revision: d850d84ba6
+Dec-04 10:55:56.906 [main] DEBUG nextflow.plugin.PluginsFacade - Plugins default=[]
+Dec-04 10:55:56.906 [main] DEBUG nextflow.plugin.PluginsFacade - Plugins resolved requirement=[]
+Dec-04 10:55:56.964 [main] DEBUG nextflow.Session - Session UUID: 71cca097-8d0d-4141-ae31-a5ae21dd18ca
+Dec-04 10:55:56.965 [main] DEBUG nextflow.Session - Run name: gigantic_mclean
+Dec-04 10:55:56.965 [main] DEBUG nextflow.Session - Executor pool size: 80
+Dec-04 10:55:56.975 [main] DEBUG nextflow.file.FilePorter - File porter settings maxRetries=3; maxTransfers=50; pollTimeout=null
+Dec-04 10:55:56.980 [main] DEBUG nextflow.util.ThreadPoolBuilder - Creating thread pool 'FileTransfer' minSize=10; maxSize=240; workQueue=LinkedBlockingQueue[10000]; allowCoreThreadTimeout=false
+Dec-04 10:55:57.011 [main] DEBUG nextflow.cli.CmdRun - 
+  Version: 24.10.3 build 5933
+  Created: 16-12-2024 15:34 UTC (23:34 CDT)
+  System: Linux 3.10.0-1160.119.1.el7.x86_64
+  Runtime: Groovy 4.0.23 on OpenJDK 64-Bit Server VM 17.0.10+7
+  Encoding: UTF-8 (UTF-8)
+  Process: 66242@localhost.localdomain [127.0.0.1]
+  CPUs: 80 - Mem: 251.3 GB (20.4 GB) - Swap: 4 GB (1.2 GB)
+Dec-04 10:55:57.027 [main] DEBUG nextflow.cli.Launcher - Operation aborted
+nextflow.exception.AbortOperationException: Cannot create work-dir: /output/work -- Make sure you have write permissions or specify a different directory by using the `-w` command line option
+	at nextflow.Session.init(Session.groovy:414)
+	at nextflow.script.ScriptRunner.execute(ScriptRunner.groovy:129)
+	at nextflow.cli.CmdRun.run(CmdRun.groovy:376)
+	at nextflow.cli.Launcher.run(Launcher.groovy:503)
+	at nextflow.cli.Launcher.main(Launcher.groovy:658)

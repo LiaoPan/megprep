@@ -215,7 +215,7 @@ else:
         png_path = epochs_base_path / selected_dir / png_file
         with cols[idx % 2]:
             if png_path.exists():
-                st.image(str(png_path), caption=png_file, use_container_width=True)
+                st.image(str(png_path), caption=png_file, width='stretch')
             else:
                 st.warning(f"⚠️ File not found: {png_file}")
 
@@ -251,7 +251,7 @@ else:
 
                 start_index = (page_number - 1) * page_size
                 end_index = start_index + page_size
-                st.dataframe(df.iloc[start_index:end_index], use_container_width=True)
+                st.dataframe(df.iloc[start_index:end_index], width='stretch')
 
                 # 数据分析
                 st.markdown('<div class="divider"></div>', unsafe_allow_html=True)

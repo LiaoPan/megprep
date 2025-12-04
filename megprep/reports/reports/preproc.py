@@ -269,14 +269,14 @@ else:
                 col1, col2 = st.columns(2)
                 with col1:
                     prev_disabled = st.session_state.start_channel <= 0
-                    if st.button('← Prev', use_container_width=True, disabled=prev_disabled, key="ch_prev"):
+                    if st.button('← Prev', width='stretch', disabled=prev_disabled, key="ch_prev"):
                         if st.session_state.start_channel > 0:
                             st.session_state.start_channel -= channel_range
                             st.rerun()
 
                 with col2:
                     next_disabled = st.session_state.start_channel + channel_range >= len(origin_raw.ch_names)
-                    if st.button('Next →', use_container_width=True, disabled=next_disabled, key="ch_next"):
+                    if st.button('Next →', width='stretch', disabled=next_disabled, key="ch_next"):
                         if st.session_state.start_channel + channel_range < len(origin_raw.ch_names):
                             st.session_state.start_channel += channel_range
                             st.rerun()
@@ -317,14 +317,14 @@ else:
                 col1, col2 = st.columns(2)
                 with col1:
                     prev_artifact_disabled = st.session_state.current_bad_index <= 0
-                    if st.button('← Prev', use_container_width=True, disabled=prev_artifact_disabled, key="art_prev"):
+                    if st.button('← Prev', width='stretch', disabled=prev_artifact_disabled, key="art_prev"):
                         if st.session_state.current_bad_index > 0:
                             st.session_state.current_bad_index -= 1
                             st.rerun()
 
                 with col2:
                     next_artifact_disabled = st.session_state.current_bad_index >= len(bad_segments) - 1
-                    if st.button('Next →', use_container_width=True, disabled=next_artifact_disabled, key="art_next"):
+                    if st.button('Next →', width='stretch', disabled=next_artifact_disabled, key="art_next"):
                         if st.session_state.current_bad_index < len(bad_segments) - 1:
                             st.session_state.current_bad_index += 1
                             st.rerun()
@@ -427,7 +427,7 @@ else:
                 bad_ch_df = st.data_editor(
                     pd.DataFrame(raw.info['bads'], columns=['Bad Channels']),
                     num_rows="dynamic",
-                    use_container_width=True,
+                    width='stretch',
                     height=300
                 )
                 bad_ch_df.dropna(inplace=True)
@@ -451,7 +451,7 @@ else:
                 bad_seg_df_edited = st.data_editor(
                     bad_seg_df_display,
                     num_rows="dynamic",
-                    use_container_width=True,
+                    width='stretch',
                     height=300,
                     column_config={
                         "onset (relative)": st.column_config.NumberColumn(
@@ -490,7 +490,7 @@ else:
             with col2:
                 save_changes = st.form_submit_button(
                     "💾 Save Changes",
-                    use_container_width=True,
+                    width='stretch',
                     type="primary"
                 )
 
@@ -588,9 +588,6 @@ else:
             st.markdown(f"**Bad Channels File:** `{bad_channels_file}`")
             st.markdown(f"**Bad Segments File:** `{bad_segments_file}`")
             st.divider()
-            st.markdown("**Raw Data Info:**")
-            st.text(origin_raw)
-            st.divider()
             st.markdown("**Measurement Info:**")
             st.json({
                 "sfreq": origin_raw.info['sfreq'],
@@ -600,6 +597,9 @@ else:
                 "n_bad_channels": len(raw.info['bads']),
                 "n_bad_segments": len(raw.annotations)
             })
+            st.divider()
+            st.markdown("**Raw Data Info:**")
+            st.write(origin_raw.info)
 
         # Status footer
         st.markdown("---")

@@ -6,7 +6,7 @@ If you're using a computing cluster with SLURM as the resource manager, make sur
 
 .. code-block:: bash
 
-    container_name=megprep
+    container_name=cmrlab/megprep
     version=0.0.3
     singularity build ${container_name}_${version}.sif docker-daemon://${container_name}:${version}
 

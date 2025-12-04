@@ -9,6 +9,7 @@ from stpyvista.utils import start_xvfb
 import pyvista as pv
 import mne
 import tempfile
+from packaging.version import parse
 import altair as alt
 from pathlib import Path
 from reports.utils import in_docker,filter_files_by_keyword
@@ -247,6 +248,11 @@ if prefixes:
         else:
             size = (1000, 800)
         time_label = f"Time ({time:.3f}s)"
+
+        brain_kwargs = dict(show=False)
+        if parse(mne.__version__) < parse("1.11.0"):
+            brain_kwargs['block'] = False
+
         surfer_kwargs = dict(
             subject=subject,
             hemi=selected_ori_hemi,
@@ -262,7 +268,7 @@ if prefixes:
             size=size,
             background=background_color,
             smoothing_steps=smoothing_steps,
-            brain_kwargs=dict(block=False, show=False),
+            brain_kwargs=brain_kwargs,
             verbose=True
         )
 
@@ -302,7 +308,7 @@ if prefixes:
 
             # Display with enhanced styling
             caption_text = f"**{selected_prefix}** | Hemisphere: `{selected_ori_hemi}` | Time: `{time:.3f} s`"
-            st.image(tmpimg, caption=caption_text, use_container_width=True)
+            st.image(tmpimg, caption=caption_text, width='stretch')
 
             # Add metadata
             col1, col2, col3= st.columns([1,1,2])

@@ -15,13 +15,18 @@ import streamlit as st
 from PIL import Image
 from streamlit_shortcuts import add_shortcuts
 from reports.utils import filter_files_by_keyword
+from reports.utils import in_docker
 
 mne.viz.set_browser_backend("matplotlib")
 
 # set report root dir.
-report_root_dir = st.session_state.get("dataset_report_path")
+# Determine report directory
+if in_docker():
+    report_root_dir = Path("/output")
+else:
+    report_root_dir = Path(st.session_state.get("dataset_report_path"))
+
 DATA_DIR = os.path.join(report_root_dir, "preprocessed","artifact_report")
-print("DATA_DIR:", DATA_DIR)
 
 CONFIG = {
     "CHANNELS_PER_VIEW": 30,
@@ -533,7 +538,6 @@ with st.sidebar:
 
         file_path = os.path.join(DATA_DIR, selected_file)
         # origin_raw = mne.io.read_raw_fif(file_path, preload=False)
-        # print("debug reading origin raw:",origin_raw,origin_raw.filenames[0])
         subject_id_dir = Path(selected_file).parent.name
         check_plots_dir = Path(check_plot_dataset_dir) / "check_imgs"
         check_plots_waveformdir = check_plots_dir / "waveform"
@@ -563,7 +567,6 @@ with st.sidebar:
         selected_file_stem = Path(selected_file).stem.replace("_bad_segments", "")
         bad_segments_file = artifact_dir / f"{selected_file_stem}_bad_segments.txt"
         bad_channels_file = artifact_dir / f"{selected_file_stem}_bad_channels.txt"
-        print("bad_segments_file:",bad_segments_file)
         if not bad_segments_file.exists():
             st.error("bad segment file is not exists...")
         else:
@@ -600,8 +603,6 @@ with st.sidebar:
             0, min(st.session_state.current_overview_index, len(available_onsets_overview) - 1)
         )
         current_onset = available_onsets[st.session_state.current_artifact_index]
-        # print("debug availabel onsets overview:",available_onsets_overview,len(available_onsets_overview))
-        print("st.session_state.current_overview_index:", st.session_state.current_overview_index)
         current_onset_overview = available_onsets_overview[st.session_state.current_overview_index]
         n_channel_groups = get_channel_groups_for_onset(check_plots_waveformdir, current_onset)
         st.session_state.current_channel_group = max(
@@ -676,7 +677,7 @@ with st.sidebar:
             with col1:
                 st.metric("Current", f"{st.session_state.current_artifact_index + 1}/{len(available_onsets)}")
             with col2:
-                st.metric("Time", f"{current_onset - first_time:.3f}s")
+                st.metric("Time", f"{current_onset:.3f}s")
 
         # Channel Navigation
         with st.expander("📡 Channels", expanded=True):
@@ -788,7 +789,7 @@ if selected_file:
                         tickmode="auto",
                         nticks=10,
                     ),
-                    yaxis=dict(showticklabels=False, range=[-0.2, 0.2]),  # Hide y-axis and adjust range
+                    yaxis=dict(showticklabels=False, range=[-1.0, 0.2]),  # Hide y-axis and adjust range
                     height=CONFIG["OVERVIEW_WAVEFORM_HEIGHT"],  # Adjust height for a better viewing experience|300
                     margin=dict(t=0, b=0, l=0, r=0),  # Remove margins for a cleaner appearance
                 )
@@ -801,7 +802,7 @@ if selected_file:
     # ========== INTERACTIVE WAVEFORM ==========
     color = get_file_color(selected_file)
     st.markdown(
-        f"### 📈MEG Waveform(Time: {(current_onset - first_time):.3f} - {(current_onset - first_time) + CONFIG['TIME_PER_PLOT']:.3f}s)"
+        f"### 📈MEG Waveform(Time: {(current_onset):.3f} - {(current_onset) + CONFIG['TIME_PER_PLOT']:.3f}s)"
     )
 
     current_channels = get_current_channels(chn_info_jl, st.session_state.current_channel_group)
@@ -817,7 +818,7 @@ if selected_file:
 
             fig = create_interactive_waveform_with_channels(
                 waveform_path,
-                current_onset - first_time,
+                current_onset,
                 CONFIG["TIME_PER_PLOT"],
                 bad_segments_list,
                 first_time,
@@ -932,8 +933,12 @@ if selected_file:
                 if st.session_state.segments_to_delete:
                     st.markdown("**🗑️ Delete:**")
                     _bad_seg_df = annotations.to_data_frame(time_format=None)
+                    # 添加时间转换
+                    _bad_seg_df["onset"] = _bad_seg_df["onset"] - first_time
                     drop = [i for i in st.session_state.segments_to_delete]
                     drop_seg_df = _bad_seg_df.iloc[drop].reset_index(drop=True)
+                    # 重命名列以显示相对时间
+                    drop_seg_df = drop_seg_df.rename(columns={"onset": "onset (rel)"})
                     st.dataframe(drop_seg_df)
 
                     # for idx in sorted(st.session_state.segments_to_delete):
@@ -981,6 +986,7 @@ if selected_file:
             if annotations and len(annotations) > 0:
                 bad_seg_df = annotations.to_data_frame(time_format=None)
                 bad_seg_df["onset"] = bad_seg_df["onset"] - first_time
+                print("debug:first_time",first_time)
                 bad_seg_df = bad_seg_df.rename(
                     columns={"onset": "onset (rel)", "duration": "duration", "description": "desc"}
                 )
