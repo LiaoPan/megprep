@@ -233,29 +233,29 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # debug
-    args.config =  """
-        find_bad_channels:
-            pyprep:
-                deviation:
-                    deviation_threshold: 5.0
-                snr: {}
-                nan_flat: {}
-            psd:
-                std_multiplier: 6
-            osl:
-                ref_meg: auto
-                significance_level: 0.05
-
-        find_bad_segments:
-            osl:
-                segment_len: 1000 # detect_badsegments
-            mne:
-                annotate_muscle_zscore:
-                    ch_type: mag
-                    threshold: 12
-
-        artifact_images_enabled: true
-        meg_vendor: '' # 'ctf', 'elekta', '4d', 'kit', 'opm', ''
-    """
+    # args.config =  """
+    #     find_bad_channels:
+    #         pyprep:
+    #             deviation:
+    #                 deviation_threshold: 5.0
+    #             snr: {}
+    #             nan_flat: {}
+    #         psd:
+    #             std_multiplier: 6
+    #         osl:
+    #             ref_meg: auto
+    #             significance_level: 0.05
+    #
+    #     find_bad_segments:
+    #         osl:
+    #             segment_len: 1000 # detect_badsegments
+    #         mne:
+    #             annotate_muscle_zscore:
+    #                 ch_type: mag
+    #                 threshold: 12
+    #
+    #     artifact_images_enabled: true
+    #     meg_vendor: '' # 'ctf', 'elekta', '4d', 'kit', 'opm', ''
+    # """
 
     main(args)
