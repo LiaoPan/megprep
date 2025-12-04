@@ -88,8 +88,19 @@ def perform_coregistration(raw_file_path, subjects_dir, fiducials="estimated", f
         view_configs = [("head-dense", ""), ("white", "_brain")]
 
         # black = (0.0, 0.0, 0.0)
-        # white = (1.0, 1.0, 1.0)
-        gray = (0.9, 0.9, 0.9)
+        white = (1.0, 1.0, 1.0)
+        # gray = (0.9, 0.9, 0.9)
+        point_color = (0.3, 0.3, 0.3) #deep_gray
+
+        # modify default code of mne. !important
+        mne.defaults.DEFAULTS['coreg']['extra_color'] = point_color
+        from mne.viz._3d import _plot_head_shape_points
+        func = _plot_head_shape_points
+        if hasattr(func, '__defaults__'):
+            defaults = list(func.__defaults__)
+            defaults[0] = 1
+            func.__defaults__ = tuple(defaults)
+
         # ==========================================
         # 1. Initial Alignment
         # ==========================================
@@ -101,7 +112,7 @@ def perform_coregistration(raw_file_path, subjects_dir, fiducials="estimated", f
                     current_kwargs = base_plot_kwargs.copy()
                     current_kwargs['surfaces'] = surf
 
-                    fig = mne.viz.create_3d_figure((400, 400), bgcolor=gray)
+                    fig = mne.viz.create_3d_figure((400, 400), bgcolor=white)
 
                     mne.viz.plot_alignment(info, fig=fig, trans=coreg.trans, **current_kwargs)
 
@@ -127,7 +138,7 @@ def perform_coregistration(raw_file_path, subjects_dir, fiducials="estimated", f
                     current_kwargs = base_plot_kwargs.copy()
                     current_kwargs['surfaces'] = surf
 
-                    fig = mne.viz.create_3d_figure((400, 400), bgcolor=gray)
+                    fig = mne.viz.create_3d_figure((400, 400), bgcolor=white)
                     mne.viz.plot_alignment(info, fig=fig, trans=coreg.trans, **current_kwargs)
 
                     fig.plotter.screenshot(output_dir / f"{subject}_coreg_fiducials{suffix}.png")
@@ -155,7 +166,7 @@ def perform_coregistration(raw_file_path, subjects_dir, fiducials="estimated", f
                     current_kwargs = base_plot_kwargs.copy()
                     current_kwargs['surfaces'] = surf
 
-                    fig = mne.viz.create_3d_figure((400, 400), bgcolor=gray)
+                    fig = mne.viz.create_3d_figure((400, 400), bgcolor=white)
                     mne.viz.plot_alignment(info, fig=fig, trans=coreg.trans, **current_kwargs)
 
                     fig.plotter.screenshot(output_dir / f"{subject}_coreg_icp{suffix}.png")
@@ -184,7 +195,7 @@ def perform_coregistration(raw_file_path, subjects_dir, fiducials="estimated", f
                     current_kwargs = base_plot_kwargs.copy()
                     current_kwargs['surfaces'] = surf
 
-                    fig = mne.viz.create_3d_figure((400, 400), bgcolor=gray)
+                    fig = mne.viz.create_3d_figure((400, 400), bgcolor=white)
                     mne.viz.plot_alignment(info, fig=fig, trans=coreg.trans, **current_kwargs)
 
                     # Set the 3D view (optional, kept from original)
@@ -245,27 +256,27 @@ def main():
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
     # debug coreg
-    # core_config = """
-    # omit_head_shape_points: 1 # mm
-    # grow_hair: 0.0 #mm
-    # icp:
-    #     n_iterations: 200
-    #     lpa_weight: 1.0
-    #     nasion_weight: 10.0
-    #     rpa_weight: 1.0
-    #     hsp_weight: 10.0
-    #     eeg_weight: 0.0
-    #     hpi_weight: 1.0
-    # finetune_icp:
-    #     n_iterations: 200
-    #     lpa_weight: 0.0
-    #     nasion_weight: 0.0
-    #     rpa_weight: 0.0
-    #     hsp_weight: 10.0
-    #     eeg_weight: 0.0
-    #     hpi_weight: 0.0
-    # """
-    # args.config = core_config
+    core_config = """
+    omit_head_shape_points: 1 # mm
+    grow_hair: 0.0 #mm
+    icp:
+        n_iterations: 200
+        lpa_weight: 1.0
+        nasion_weight: 10.0
+        rpa_weight: 1.0
+        hsp_weight: 10.0
+        eeg_weight: 0.0
+        hpi_weight: 1.0
+    finetune_icp:
+        n_iterations: 200
+        lpa_weight: 0.0
+        nasion_weight: 0.0
+        rpa_weight: 0.0
+        hsp_weight: 10.0
+        eeg_weight: 0.0
+        hpi_weight: 0.0
+    """
+    args.config = core_config
 
     # Set environ params for stability
     os.environ["MESA_GLSL_VERSION_OVERRIDE"] = "150"

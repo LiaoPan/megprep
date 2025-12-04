@@ -463,12 +463,6 @@ if not os.path.exists(DATA_DIR):
     st.stop()
 
 
-processed_files_file = "processed_files.jl"
-if os.path.exists(processed_files_file):
-    processed_files = jl.load(processed_files_file)
-else:
-    processed_files = []
-
 # ========== SIDEBAR ==========
 with st.sidebar:
     st.sidebar.markdown(
@@ -481,7 +475,10 @@ with st.sidebar:
     )
     st.header("📁 File Selection")
 
-    subdirectories = sorted(os.listdir(DATA_DIR))
+    subdirectories = sorted([
+        d for d in os.listdir(DATA_DIR)
+        if os.path.isdir(os.path.join(DATA_DIR, d))
+    ])
     selected_dir = st.sidebar.selectbox("Select Dataset:", options=subdirectories, index=0)
     full_path = os.path.join(DATA_DIR, selected_dir)
     check_plot_dataset_dir = os.path.join(DATA_DIR, selected_dir)
@@ -489,6 +486,12 @@ with st.sidebar:
     if not os.path.exists(check_plot_dataset_dir):
         st.error(f"⚠️ Check Plot directory not found: {check_plot_dataset_dir}")
         st.stop()
+
+    processed_files_file = Path(DATA_DIR) / "processed_files.jl"
+    if os.path.exists(processed_files_file):
+        processed_files = jl.load(processed_files_file)
+    else:
+        processed_files = []
 
     files = sorted(
         [

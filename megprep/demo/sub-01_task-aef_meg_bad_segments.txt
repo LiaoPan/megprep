@@ -1,9 +1,0 @@
-# MNE-Annotations
-# orig_time : 2000-01-01 00:00:00
-# onset, duration, description
-65.999,1.0,bad_segment_grad
-65.999,1.0,bad_segment_grad
-67.999,2.0,bad_segment_grad
-67.999,2.0,bad_segment_grad
-192.999,1.0,bad_segment_mag
-192.999,1.0,bad_segment_mag
