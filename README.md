@@ -132,10 +132,35 @@ We welcome contributions to MEGPrep! If you want to contribute code or improve d
     cd megprep
     ```
 
-2.  **Environment Setup:**
-    Ensure you have Python and Nextflow installed locally if you plan to run scripts outside of Docker for testing.
+2. **Environment Setup:**
+    If you plan to develop or run the pipeline locally (outside Docker), you must install Nextflow.
+
+    **Prerequisites:**
+    *   **System**: Any POSIX-compatible system (Linux, macOS, etc.), or Windows through WSL.
+    *   **Dependencies**: Bash 3.2+ and **Java 17** (up to 23).
+
+    **Installation:**
+    Please refer to the [Nextflow Official Documentation](https://www.nextflow.io/docs/latest/install.html).
+
+    If you use SDKMAN (recommended), initialize it:
     ```bash
-    pip install -r requirements.txt
+    source "$HOME/.sdkman/bin/sdkman-init.sh"
+    ```
+
+    **Configuration:**
+    Ensure the Nextflow binary is in your PATH.
+    *   Common location: `$HOME/.local/bin/nextflow`
+
+    **Useful Nextflow Developer Commands:**
+
+    *   **Check Installation**:
+    ```bash
+    nextflow info
+    ```
+
+    *   **Run with Trace** (creates an execution trace file):
+    ```bash
+    nextflow run <script.nf> -with-trace
     ```
 
 3.  **Build Docker Image Locally (Optional):**
