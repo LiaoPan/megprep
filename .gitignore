@@ -4,6 +4,8 @@
 *.nii
 *.h5
 *.mat
+*.jl
+DEV.md
 *.tar.gz
 nextflow/.nextflow/
 nextflow/_misc/

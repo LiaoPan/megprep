@@ -518,7 +518,7 @@ with st.sidebar:
         "Select MEG File:",
         filtered_files,
         label_visibility="collapsed",
-        format_func=lambda file_path: f"{'【Processed】' if file_path in processed_files else ''} {Path(file_path).stem}",
+        format_func=lambda file_path: f"{'[Processed]' if file_path in processed_files else ''} {Path(file_path).stem}",
     )
 
     if selected_file:
