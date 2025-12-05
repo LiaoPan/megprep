@@ -1,5 +1,5 @@
 
-# MEGPrep: Fully Automated MEG Preprocessing Pipeline
+# MEGPrep: A Scalable and Reproducible Pipeline for Large-Scale MEG Preprocessing
 
 [![Documentation Status](https://readthedocs.org/projects/megprep/badge/?version=latest)](https://megprep.readthedocs.io/)
 [![Docker Pulls](https://img.shields.io/docker/pulls/cmrlab/megprep)](https://hub.docker.com/r/cmrlab/megprep)
