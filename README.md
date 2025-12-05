@@ -41,7 +41,7 @@ Offers an easy-to-use configuration system. Researchers can adapt the preprocess
 MEGPrep is distributed as a Docker container. You must have **Docker** installed on your system.
 
 1.  **Install Docker**: Follow the instructions for your operating system on the [Docker official website](https://docs.docker.com/get-docker/).
-2.  **Pull the Image**:
+2.  **[Pull the Image](https://hub.docker.com/r/cmrlab/megprep)**:
     ```bash
     docker pull cmrlab/megprep:<version>
     ```
