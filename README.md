@@ -164,9 +164,16 @@ We welcome contributions to MEGPrep! If you want to contribute code or improve d
     ```
 
 3.  **Build Docker Image Locally (Optional):**
-    If you modified the Dockerfile or dependencies:
+    If you modified the Dockerfile or dependencies, you can build the image manually using Docker or the provided helper script.
+    
+    **Using the build script (Recommended):**
     ```bash
-    docker build -t megprep:local .
+    bash build_megprep.sh
+    ```
+    
+    **Using Docker directly:**
+    ```bash
+    docker build -t megprep:local -f megprep.Dockerfile .
     ```
 
 4.  **Submit a Pull Request:**
