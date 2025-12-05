@@ -181,10 +181,3 @@ We welcome contributions to MEGPrep! If you want to contribute code or improve d
     *   Create a new branch for your feature or fix.
     *   Commit your changes and push to your fork.
     *   Submit a Pull Request to the `main` branch.
-
----
-
-## 🔗 Resources
-
-*   **Documentation**: [https://megprep.readthedocs.io/](https://megprep.readthedocs.io/)
-*   **Source Code**: [https://github.com/liaopan/megprep](https://github.com/liaopan/megprep)
