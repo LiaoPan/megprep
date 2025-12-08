@@ -30,10 +30,12 @@ artifacts_page = st.Page("reports/artifacts.py", title="Artifacts - QuickCheck",
 
 quality_check_page = st.Page("reports/quality_check.py",title="Quality Summary", icon=":material/dashboard:")
 
+demo_page = st.Page("reports/demo_video.py",title="MEGPrep Interaction Guide", icon=":material/videocam:")
+
 # search_page = st.Page("tools/search.py", title="Search", icon=":material/search:")
 # history = st.Page("tools/history.py", title="History", icon=":material/history:")
 
-pg = st.navigation([preproc_page,
+pg = st.navigation([demo_page,preproc_page,
                     artifacts_page,
                     ica_page,
                     epochs_page,

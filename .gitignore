@@ -4,6 +4,7 @@
 *.nii
 *.h5
 *.mat
+*.mp4
 *.jl
 DEV.md
 *.tar.gz

@@ -625,7 +625,7 @@ with st.sidebar:
                 "⏮️ Prev", disabled=(st.session_state.current_artifact_index <= 0), key="art_prev", width="stretch"
             ):
                 st.session_state.current_artifact_index -= 1
-                st.session_state.current_channel_group = 0
+                # st.session_state.current_channel_group = 0
                 st.rerun()
 
         with col2:  # ['d', "arrowright"], hint=False
@@ -636,7 +636,7 @@ with st.sidebar:
                 width="stretch",
             ):
                 st.session_state.current_artifact_index += 1
-                st.session_state.current_channel_group = 0
+                # st.session_state.current_channel_group = 0
                 st.rerun()
         # ['s',"arrowdown"],hint=False,
         if st.button(
