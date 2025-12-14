@@ -340,7 +340,7 @@ else:
                             st.session_state.start_channel:st.session_state.start_channel + channel_range]
 
         # Filter data
-        raw = origin_raw.filter(*freqrange, n_jobs=8)
+        raw = origin_raw.copy().filter(*freqrange, n_jobs=8)
 
         # Load artifact files
         bad_channels_file = artifact_dir / f"{subject_id_dir}_preproc-raw_bad_channels.txt"

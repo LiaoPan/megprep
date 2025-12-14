@@ -71,6 +71,47 @@ st.markdown("""
     .highlight-badge:hover {
         background-color: #DBEAFE;
     }
+
+ /* Link Card Styling for Sidebar */
+    .link-card {
+        display: flex;
+        align-items: center;
+        padding: 10px 12px;
+        background-color: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        text-decoration: none;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    }
+    
+    .link-card:hover {
+        background-color: #F1F5F9;
+        border-color: #CBD5E1;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .link-text {
+        font-weight: 600;
+        color: #334155;
+        font-size: 0.9rem;
+    }
+    
+    /* Icon Styling in Link Card */
+    .link-icon-svg {
+        width: 20px;
+        height: 20px;
+        margin-right: 12px;
+        fill: #334155; /* Slate-700 */
+        transition: fill 0.2s;
+    }
+    
+    .link-card:hover .link-icon-svg {
+        fill: #0F172A; /* Slate-900 (Darker on hover) */
+    }
+
     
     </style>
     """, unsafe_allow_html=True)
@@ -121,6 +162,32 @@ with st.sidebar:
     )
 
     st.markdown("---")
+        # Github Link
+    st.markdown("""
+    <a href="https://github.com/LiaoPan/megprep" target="_blank" style="text-decoration: none;">
+        <div class="link-card">
+            <!-- GitHub SVG Icon -->
+            <svg class="link-icon-svg" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.419-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+            </svg>
+            <span class="link-text">GitHub Repository</span>
+    </a>
+    """, unsafe_allow_html=True)
+
+    # ReadTheDocs Link
+    st.markdown("""
+    <a href="https://megprep.readthedocs.io/en/latest/" target="_blank" style="text-decoration: none;">
+        <div class="link-card">
+            <!-- Solid 'Chrome Reader Mode' Icon - Matches visual weight of GitHub icon -->
+            <svg class="link-icon-svg" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <!-- Outer Frame + Sidebar (Left) + Lines (Right) in one solid fill path -->
+                <path d="M21 4H3c-1.1 0-2 .9-2 2v13c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM9 19H3V6h6v13zm12 0h-10V6h10v13z M14 9.5h6v-1.5h-6v1.5zm0 2.5h6v-1.5h-6v1.5zm0 2.5h6v-1.5h-6v1.5z"/>
+            </svg>
+            <span class="link-text">Documentation</span>
+        </div>
+    </a>
+    """, unsafe_allow_html=True)
+
 
 # --- 5. Main Content Renderer ---
 
