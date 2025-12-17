@@ -256,27 +256,27 @@ def main():
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
     # debug coreg
-    core_config = """
-    omit_head_shape_points: 1 # mm
-    grow_hair: 0.0 #mm
-    icp:
-        n_iterations: 200
-        lpa_weight: 1.0
-        nasion_weight: 10.0
-        rpa_weight: 1.0
-        hsp_weight: 10.0
-        eeg_weight: 0.0
-        hpi_weight: 1.0
-    finetune_icp:
-        n_iterations: 200
-        lpa_weight: 0.0
-        nasion_weight: 0.0
-        rpa_weight: 0.0
-        hsp_weight: 10.0
-        eeg_weight: 0.0
-        hpi_weight: 0.0
-    """
-    args.config = core_config
+    # core_config = """
+    # omit_head_shape_points: 1 # mm
+    # grow_hair: 0.0 #mm
+    # icp:
+    #     n_iterations: 200
+    #     lpa_weight: 1.0
+    #     nasion_weight: 10.0
+    #     rpa_weight: 1.0
+    #     hsp_weight: 10.0
+    #     eeg_weight: 0.0
+    #     hpi_weight: 1.0
+    # finetune_icp:
+    #     n_iterations: 200
+    #     lpa_weight: 0.0
+    #     nasion_weight: 0.0
+    #     rpa_weight: 0.0
+    #     hsp_weight: 10.0
+    #     eeg_weight: 0.0
+    #     hpi_weight: 0.0
+    # """
+    # args.config = core_config
 
     # Set environ params for stability
     os.environ["MESA_GLSL_VERSION_OVERRIDE"] = "150"
