@@ -895,7 +895,7 @@ workflow {
             // wait epochs and trans results
             epoch_subject_id = epoch_subject_paths.meg_subject_id
             fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
-            fwd_inputs.view {"fwd_inputs: ${it} "}
+            // fwd_inputs.view {"fwd_inputs: ${it} "}
 
             // Forward-Solution
 //             fwds = forward_solution(params.preproc_dir,
@@ -909,7 +909,7 @@ workflow {
             // fwds and covs have the same meg_subject_id
             cov_subject_id = cov_files.meg_subject_id
             source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
-            source_inputs.view {"source imaging: ${it} "}
+            //source_inputs.view {"source imaging: ${it} "}
 
             // Source Imaging
             source_imaging(params.src_type, params.preproc_dir, source_inputs)
@@ -931,7 +931,7 @@ workflow {
                 // wait epochs and trans results
                 epoch_subject_id = epoch_subject_paths.meg_subject_id
                 fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
-                fwd_inputs.view {"fwd_inputs: ${it} "}
+                //fwd_inputs.view {"fwd_inputs: ${it} "}
 
                 fwds = forward_solution(params.preproc_dir,
                                 params.fs_subjects_dir,
@@ -940,7 +940,7 @@ workflow {
                 // Source Imaging
                 cov_subject_id = cov_files.meg_subject_id
                 source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
-                source_inputs.view {"source imaging: ${it} "}
+                //source_inputs.view {"source imaging: ${it} "}
 
                 source_imaging(params.src_type, params.preproc_dir, source_inputs)
         }
