@@ -1,0 +1,12 @@
+*.pyc
+*.swo
+*.swp
+*.egg-info
+.vscode
+.coverage
+.DS_Store
+__pycache__
+dist
+build
+doc/build
+doc/source/build_tutorials/
