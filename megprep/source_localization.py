@@ -434,7 +434,7 @@ def main():
 #         loose: auto
 #         depth: 0.8
 #         fixed: auto
-#         rank: info
+#         rank: null
 #     apply_inverse:
 #         lambda2: 0.111111111111
 #         method: dSPM

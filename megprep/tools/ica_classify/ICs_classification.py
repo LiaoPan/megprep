@@ -996,7 +996,7 @@ def classify_ics(ica_source_file,ica_fit_file,explained_var_file,config):
             other_power = 0
             for brain_name in ['Left-frontal', 'Right-frontal', 'Left-temporal', 'Right-temporal']:
                 _eog_power += brain_areas_dict[ic_num][brain_name]
-            for brain_name in ['Left-occipital', 'Right-occipital', 'Remaining']:
+            for brain_name in ['Left-occipital', 'Right-occipital', 'Left-parietal', 'Right-parietal', 'Remaining']:
                 other_power += brain_areas_dict[ic_num][brain_name]
             if _eog_power > other_power:
                 print(f"[IC_classify]EOG ICs:{ic_num}")
