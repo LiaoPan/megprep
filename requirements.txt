@@ -256,4 +256,3 @@ streamlit==1.51.0 #1.45.0
 streamlit_shortcuts==1.2.1
 plotly==6.5.0
 mne-icalabel==0.8.1
-osl-ephys==2.1.0
