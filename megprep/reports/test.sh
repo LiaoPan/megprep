@@ -11,4 +11,8 @@ export SUBJECTS_DIR=/data/liaopan/megprep_demo/cog_dataset/smri
 #export DATASET_REPORT_PATH=
 #export SUBJECTS_DIR=/data/liaopan/datasets/auditory_OPM_stationary/smri
 
-streamlit run reports.py --server.address=0.0.0.0 --server.port=8502 --server.headless=true
+# Interactive Reports
+# streamlit run reports.py --server.address=0.0.0.0 --server.port=8502 --server.headless=true
+
+# Global Static Reports
+python static_html_report.py   --report_root /data/liaopan/datasets/WAND_Extracted/g_nx   --output_dir /data/liaopan/megprep/static_html_report_WAND

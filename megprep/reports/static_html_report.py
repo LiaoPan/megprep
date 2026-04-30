@@ -1,0 +1,3261 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Generate a portable static HTML report package for MEGPrep outputs.
+
+The generated directory keeps HTML pages, copied result files, and summary data
+in one place so the whole folder can be zipped and viewed offline.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import csv
+import html
+import json
+import os
+import re
+import shutil
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import mne
+import pandas as pd
+
+
+DEFAULT_THRESHOLDS = {
+    "bad_channel_threshold": 30,
+    "bad_segment_threshold": 50,
+    "coreg_mean_threshold": 5.0,
+    "coreg_max_threshold": 10.0,
+    "epoch_reject_rate_threshold": 0.30,
+}
+
+STEP_DEFS = [
+    ("artifacts", "Artifacts"),
+    ("ica", "ICA"),
+    ("coregistration", "Coreg"),
+    ("headmodel", "Head"),
+    ("epochs", "Epochs"),
+    ("covariance", "Cov"),
+    ("source", "Source"),
+]
+
+REPORT_CSS = """
+:root {
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --panel-soft: #f6f8fb;
+  --text: #17212b;
+  --muted: #667085;
+  --line: #dbe4ee;
+  --accent: #4267d5;
+  --accent-2: #1f4acc;
+  --accent-soft: #eef3ff;
+  --warn: #b54708;
+  --warn-soft: #fff4dd;
+  --danger: #c4320a;
+  --danger-soft: #ffe9e5;
+  --good: #067647;
+  --good-soft: #ddf9eb;
+  --hero-top: #eef4ff;
+  --hero-bottom: #e8f0ff;
+  --shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
+  --radius: 20px;
+  --radius-sm: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(66, 103, 213, 0.12), transparent 24%),
+    radial-gradient(circle at top right, rgba(66, 103, 213, 0.08), transparent 20%),
+    var(--bg);
+  color: var(--text);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.container {
+  width: min(1500px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 28px 0 56px;
+}
+
+.hero {
+  background:
+    radial-gradient(circle at top right, rgba(66, 103, 213, 0.12), transparent 28%),
+    linear-gradient(180deg, var(--hero-top), var(--hero-bottom));
+  color: var(--text);
+  border-radius: 28px;
+  padding: 28px 32px;
+  box-shadow: var(--shadow);
+  margin-bottom: 24px;
+  border: 1px solid rgba(66, 103, 213, 0.12);
+}
+
+.hero h1 {
+  margin: 0 0 10px;
+  font-size: 2.05rem;
+  letter-spacing: -0.02em;
+}
+
+.hero p {
+  margin: 6px 0;
+  color: var(--muted);
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(66, 103, 213, 0.08);
+  color: var(--accent-2);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 18px;
+}
+
+.toolbar input,
+.toolbar select {
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 10px 14px;
+  min-width: 180px;
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.toolbar input::placeholder {
+  color: #98a2b3;
+}
+
+.filter-panel {
+  margin-top: 20px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(66, 103, 213, 0.12);
+  border-radius: 18px;
+  padding: 16px;
+  backdrop-filter: blur(8px);
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.control-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.control-group.search-control {
+  grid-column: span 1;
+}
+
+.control-group label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.control-group input,
+.control-group select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  background: #fff;
+  border: 1px solid rgba(66, 103, 213, 0.14);
+  border-radius: 14px;
+  padding: 11px 14px;
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.control-group input:focus,
+.control-group select:focus {
+  border-color: rgba(66, 103, 213, 0.55);
+  box-shadow: 0 0 0 4px rgba(66, 103, 213, 0.10);
+}
+
+.hero-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.hero-links a {
+  color: var(--accent-2);
+  background: #fff;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(66, 103, 213, 0.14);
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+}
+
+.grid.cards {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  margin-bottom: 22px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px 18px 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.card::after {
+  content: "";
+  position: absolute;
+  inset: auto auto 0 0;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(90deg, var(--accent), rgba(66, 103, 213, 0.18));
+}
+
+.card .label {
+  color: var(--muted);
+  font-size: 0.92rem;
+  margin-bottom: 10px;
+}
+
+.card .value {
+  font-size: 1.9rem;
+  font-weight: 700;
+}
+
+.card .subvalue {
+  color: var(--muted);
+  margin-top: 6px;
+  font-size: 0.92rem;
+}
+
+.section {
+  margin-top: 26px;
+}
+
+.section h2 {
+  margin: 0 0 14px;
+  font-size: 1.25rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.35fr 0.95fr;
+  gap: 18px;
+}
+
+.dashboard-grid + .dashboard-grid {
+  margin-top: 18px;
+}
+
+.panel h3 {
+  margin: 0 0 14px;
+  font-size: 1.02rem;
+}
+
+.panel-kicker {
+  margin: 0 0 8px;
+  color: var(--accent-2);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.panel-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.panel-title-group h3 {
+  margin-bottom: 4px;
+  font-size: 1.08rem;
+}
+
+.panel-subtitle {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.subtle {
+  color: var(--muted);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  font-size: 0.9rem;
+  color: var(--muted);
+  background: #fafcfd;
+  position: sticky;
+  top: 0;
+}
+
+th.sortable {
+  padding: 0;
+}
+
+th.sortable.active-sort {
+  background: linear-gradient(180deg, rgba(66, 103, 213, 0.12), rgba(66, 103, 213, 0.04));
+  box-shadow: inset 0 -3px 0 rgba(66, 103, 213, 0.82);
+}
+
+td.active-sort-cell {
+  background: rgba(66, 103, 213, 0.06);
+  box-shadow: inset 3px 0 0 rgba(66, 103, 213, 0.28);
+}
+
+.sort-header {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+  line-height: 1.2;
+}
+
+.sort-header:hover {
+  background: rgba(66, 103, 213, 0.06);
+}
+
+.sort-header:focus-visible {
+  outline: 2px solid rgba(66, 103, 213, 0.35);
+  outline-offset: -2px;
+}
+
+.sort-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  color: #98a2b3;
+  font-size: 0.78rem;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.sort-header.active {
+  color: var(--accent-2);
+  font-weight: 800;
+}
+
+.sort-header.active .sort-indicator {
+  color: var(--accent-2);
+  opacity: 1;
+}
+
+tr:hover td {
+  background: #fbfdff;
+}
+
+tr.row-warn td {
+  background: rgba(181, 71, 8, 0.045);
+}
+
+tr.row-fail td {
+  background: rgba(196, 50, 10, 0.05);
+}
+
+tr.row-warn:hover td {
+  background: rgba(181, 71, 8, 0.075);
+}
+
+tr.row-fail:hover td {
+  background: rgba(196, 50, 10, 0.085);
+}
+
+tr.row-warn td.active-sort-cell {
+  background: rgba(181, 71, 8, 0.09);
+}
+
+tr.row-fail td.active-sort-cell {
+  background: rgba(196, 50, 10, 0.10);
+}
+
+tr:hover td.active-sort-cell {
+  background: rgba(66, 103, 213, 0.11);
+}
+
+tr.row-warn:hover td.active-sort-cell {
+  background: rgba(181, 71, 8, 0.12);
+}
+
+tr.row-fail:hover td.active-sort-cell {
+  background: rgba(196, 50, 10, 0.13);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.pill.good {
+  color: var(--good);
+  background: var(--good-soft);
+  border-color: rgba(6, 118, 71, 0.10);
+}
+
+.pill.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: rgba(181, 71, 8, 0.12);
+}
+
+.pill.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(196, 50, 10, 0.12);
+}
+
+.pill.neutral {
+  color: var(--muted);
+  background: var(--panel-soft);
+  border-color: var(--line);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-block;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+}
+
+.metric-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.metric-box {
+  background: #fbfdff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.metric-box .k {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+
+.metric-box .v {
+  font-size: 1.15rem;
+  font-weight: 700;
+  min-width: 0;
+}
+
+.metric-box .v.smaller {
+  font-size: 1rem;
+}
+
+.metric-box.wide {
+  grid-column: 1 / -1;
+}
+
+.metric-box .v.wrap,
+.mono-path {
+  font-size: 0.95rem;
+  font-weight: 600;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 18px;
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.figure {
+  background: #fbfdff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+}
+
+.figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #fff;
+}
+
+.figure .caption {
+  padding: 10px 12px 12px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.figure.flagged {
+  border-color: rgba(181, 71, 8, 0.28);
+  box-shadow: 0 10px 24px rgba(181, 71, 8, 0.12);
+  background: linear-gradient(180deg, #fffaf2, #fbfdff 22%);
+}
+
+.figure-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  z-index: 1;
+  border: 1px solid transparent;
+  backdrop-filter: blur(6px);
+}
+
+.figure-badge.warn {
+  color: var(--warn);
+  background: rgba(255, 244, 221, 0.92);
+  border-color: rgba(181, 71, 8, 0.18);
+}
+
+.figure-badge.neutral {
+  color: var(--muted);
+  background: rgba(246, 248, 251, 0.94);
+  border-color: rgba(152, 162, 179, 0.18);
+}
+
+.alarm-list {
+  display: grid;
+  gap: 10px;
+}
+
+.alarm-item {
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--warn);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #fffdfa;
+}
+
+.alarm-item.danger {
+  border-left-color: var(--danger);
+  background: #fff8f7;
+}
+
+.alarm-item .category {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.small {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.path-list {
+  display: grid;
+  gap: 8px;
+}
+
+.path-row {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fbfdff;
+}
+
+.scroll-box {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfdff;
+}
+
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.detail-table th,
+.detail-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.detail-table th {
+  position: sticky;
+  top: 0;
+  background: #f7faff;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.info-note {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.rule-list {
+  display: grid;
+  gap: 10px;
+}
+
+.rule-item {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfdff;
+}
+
+.step-matrix-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.step-matrix-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.step-matrix-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(66, 103, 213, 0.12);
+  background: var(--accent-soft);
+  color: var(--accent-2);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.step-matrix-wrap {
+  max-height: 680px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fbfdff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.step-matrix-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.step-matrix-table th,
+.step-matrix-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid rgba(219, 228, 238, 0.9);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.step-matrix-table th:last-child,
+.step-matrix-table td:last-child {
+  border-right: 0;
+}
+
+.step-matrix-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f6f9ff;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.step-matrix-table .subject-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 180px;
+  text-align: left;
+  background: #fbfdff;
+  font-weight: 700;
+  box-shadow: 14px 0 22px rgba(15, 23, 42, 0.06);
+}
+
+.step-matrix-table thead .subject-col {
+  z-index: 3;
+  background: #f6f9ff;
+  box-shadow: 14px 0 22px rgba(15, 23, 42, 0.08);
+}
+
+.step-matrix-table tbody tr:hover td {
+  background: rgba(66, 103, 213, 0.06);
+}
+
+.step-matrix-table tbody tr:hover .subject-col {
+  background: #f3f7ff;
+}
+
+.step-cell {
+  min-width: 84px;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.step-cell.is-ready {
+  color: var(--good);
+  background: rgba(6, 118, 71, 0.10);
+}
+
+.step-cell.is-missing {
+  color: var(--muted);
+  background: rgba(152, 162, 179, 0.16);
+}
+
+.step-cell .step-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+}
+
+.inline-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.inline-controls label {
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.inline-controls select {
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 12px;
+  padding: 8px 12px;
+  min-width: 120px;
+  max-width: 100%;
+}
+
+.segment-description {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.footer {
+  margin-top: 28px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.stat-bar-list {
+  display: grid;
+  gap: 12px;
+}
+
+.stat-bar-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+}
+
+.stat-bar-track {
+  height: 10px;
+  width: 100%;
+  background: #edf2f7;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.stat-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #7b9cff);
+}
+
+.snapshot-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.snapshot-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.snapshot-item.good {
+  background: var(--good-soft);
+  color: var(--good);
+}
+
+.snapshot-item.missing {
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+
+.snapshot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.subject-table-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pager button {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+  border-radius: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.pager button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.table-count {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.table-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.legend-dot.warn {
+  background: var(--warn);
+}
+
+.legend-dot.fail {
+  background: var(--danger);
+}
+
+.top-subject-list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.top-subject-item {
+  border: 1px solid var(--line);
+  background: #fbfdff;
+  border-radius: 14px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.top-subject-item strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.hide {
+  display: none !important;
+}
+
+@media (max-width: 1024px) {
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .control-group.search-control {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 720px) {
+  .container {
+    width: min(100% - 24px, 1500px);
+    padding-top: 18px;
+  }
+
+  .hero {
+    padding: 22px 18px;
+    border-radius: 22px;
+  }
+
+  .hero h1 {
+    font-size: 1.55rem;
+  }
+
+  th,
+  td {
+    padding: 10px 8px;
+  }
+
+  .subject-table-controls {
+    align-items: stretch;
+  }
+
+  .toolbar input,
+  .toolbar select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .pager {
+    width: 100%;
+  }
+
+  .step-matrix-meta {
+    flex-direction: column;
+  }
+
+  .inline-controls {
+    width: 100%;
+  }
+
+  .filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .control-group.search-control {
+    grid-column: span 1;
+  }
+
+  .filter-panel {
+    padding: 14px;
+  }
+}
+"""
+
+REPORT_JS = """
+function normalizeText(value) {
+  return (value || "").toString().toLowerCase();
+}
+
+function toNumber(value, fallback = -1) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function escapeHtml(value) {
+  return (value || "").toString()
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatFixed(value, digits = 0, suffix = "") {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return "N/A";
+  }
+  return `${parsed.toFixed(digits)}${suffix}`;
+}
+
+function boolFromDataset(value) {
+  return value === "1" || value === "true";
+}
+
+function getJsonScriptData(elementId) {
+  const element = document.getElementById(elementId);
+  if (!element) {
+    return [];
+  }
+  try {
+    return JSON.parse(element.textContent || "[]");
+  } catch (error) {
+    console.error(`Failed to parse JSON payload from ${elementId}`, error);
+    return [];
+  }
+}
+
+const STEP_MATRIX_DEFS = [
+  { key: "artifacts", label: "Artifacts" },
+  { key: "ica", label: "ICA" },
+  { key: "coregistration", label: "Coreg" },
+  { key: "headmodel", label: "Head" },
+  { key: "epochs", label: "Epochs" },
+  { key: "covariance", label: "Cov" },
+  { key: "source", label: "Source" },
+];
+
+function getStepDatasetValue(row, stepKey) {
+  const datasetKey = `step${stepKey.charAt(0).toUpperCase()}${stepKey.slice(1)}`;
+  return row.dataset[datasetKey];
+}
+
+function getSubjectTableState() {
+  if (!window.__subjectTableState) {
+    window.__subjectTableState = { page: 1, sortKey: "risk", sortDirection: "desc" };
+  }
+  return window.__subjectTableState;
+}
+
+function getBadSegmentTableState() {
+  if (!window.__badSegmentTableState) {
+    window.__badSegmentTableState = { page: 1 };
+  }
+  return window.__badSegmentTableState;
+}
+
+function updateStepMatrix(matchedRows, visibleRows) {
+  const container = document.getElementById("stepCompletionMatrix");
+  if (!container) {
+    return;
+  }
+
+  const info = document.getElementById("stepMatrixInfo");
+  const summary = document.getElementById("stepMatrixSummary");
+  if (!matchedRows.length) {
+    if (info) {
+      info.textContent = "No subjects match the current homepage filters.";
+    }
+    if (summary) {
+      summary.innerHTML = "";
+    }
+    container.innerHTML = '<div class="small">No subjects available for the current filter combination.</div>';
+    return;
+  }
+
+  if (info) {
+    info.textContent = `Heat matrix shows the current page slice (${visibleRows.length} of ${matchedRows.length} matched subjects).`;
+  }
+
+  if (summary) {
+    summary.innerHTML = STEP_MATRIX_DEFS.map((step) => {
+      const count = matchedRows.filter((row) => boolFromDataset(getStepDatasetValue(row, step.key))).length;
+      return `<span class="summary-chip">${escapeHtml(step.label)} ${count}/${matchedRows.length}</span>`;
+    }).join("");
+  }
+
+  const header = STEP_MATRIX_DEFS.map((step) => `<th>${escapeHtml(step.label)}</th>`).join("");
+  const body = visibleRows.map((row) => {
+    const subjectName = row.dataset.subject || "Unknown";
+    const subjectUrl = row.dataset.subjectUrl || "#";
+    const cells = STEP_MATRIX_DEFS.map((step) => {
+      const isReady = boolFromDataset(getStepDatasetValue(row, step.key));
+      const label = isReady ? "READY" : "MISS";
+      const cssClass = isReady ? "is-ready" : "is-missing";
+      return `<td class="step-cell ${cssClass}" title="${escapeHtml(`${subjectName}: ${step.label} ${isReady ? "ready" : "missing"}`)}"><span class="step-state">${label}</span></td>`;
+    }).join("");
+    return `<tr><td class="subject-col"><a href="${escapeHtml(subjectUrl)}">${escapeHtml(subjectName)}</a></td>${cells}</tr>`;
+  }).join("");
+
+  container.innerHTML = `
+    <div class="step-matrix-wrap">
+      <table class="step-matrix-table">
+        <thead>
+          <tr>
+            <th class="subject-col">Subject</th>
+            ${header}
+          </tr>
+        </thead>
+        <tbody>
+          ${body}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function getDefaultSortDirection(sortKey) {
+  return sortKey === "subject" ? "asc" : "desc";
+}
+
+function getSortColumnIndex(sortKey) {
+  const columnMap = {
+    subject: 1,
+    alarm_count: 3,
+    bad_channels: 4,
+    bad_segments: 5,
+    marked_ica: 6,
+    coreg_mean: 7,
+    coreg_max: 8,
+    epoch_reject: 9,
+  };
+  return columnMap[sortKey] || null;
+}
+
+function compareSubjectRows(a, b, sortKey, direction) {
+  let result = 0;
+  if (sortKey === "subject") {
+    result = normalizeText(a.dataset.subject).localeCompare(normalizeText(b.dataset.subject));
+  } else if (sortKey === "alarm_count") {
+    result = toNumber(a.dataset.alarmCount) - toNumber(b.dataset.alarmCount);
+  } else if (sortKey === "bad_channels") {
+    result = toNumber(a.dataset.badChannels) - toNumber(b.dataset.badChannels);
+  } else if (sortKey === "bad_segments") {
+    result = toNumber(a.dataset.badSegments) - toNumber(b.dataset.badSegments);
+  } else if (sortKey === "marked_ica") {
+    result = toNumber(a.dataset.markedIca) - toNumber(b.dataset.markedIca);
+  } else if (sortKey === "coreg_mean") {
+    result = toNumber(a.dataset.coregMean) - toNumber(b.dataset.coregMean);
+  } else if (sortKey === "coreg_max") {
+    result = toNumber(a.dataset.coregMax) - toNumber(b.dataset.coregMax);
+  } else if (sortKey === "epoch_reject") {
+    result = toNumber(a.dataset.epochReject) - toNumber(b.dataset.epochReject);
+  } else if (sortKey === "missing_steps") {
+    result = toNumber(a.dataset.missingCount) - toNumber(b.dataset.missingCount);
+  } else {
+    result = toNumber(a.dataset.riskScore) - toNumber(b.dataset.riskScore);
+  }
+
+  if (result === 0) {
+    result = normalizeText(a.dataset.subject).localeCompare(normalizeText(b.dataset.subject));
+  }
+  return direction === "asc" ? result : -result;
+}
+
+function syncSubjectSortUI() {
+  const state = getSubjectTableState();
+  const select = document.getElementById("subjectSortBy");
+  if (select && select.value !== state.sortKey) {
+    select.value = state.sortKey;
+  }
+
+  const activeColumnIndex = getSortColumnIndex(state.sortKey);
+
+  document.querySelectorAll("#subjectTable th.sortable").forEach((cell) => {
+    const button = cell.querySelector("[data-sort-key]");
+    const isActive = button && button.dataset.sortKey === state.sortKey;
+    cell.classList.toggle("active-sort", Boolean(isActive));
+  });
+
+  document.querySelectorAll("#subjectTable tbody tr").forEach((row) => {
+    row.querySelectorAll("td").forEach((cell, index) => {
+      cell.classList.toggle("active-sort-cell", activeColumnIndex !== null && index + 1 === activeColumnIndex);
+    });
+  });
+
+  document.querySelectorAll("#subjectTable [data-sort-key]").forEach((button) => {
+    const isActive = button.dataset.sortKey === state.sortKey;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-sort", isActive ? state.sortDirection : "none");
+    const indicator = button.querySelector(".sort-indicator");
+    if (indicator) {
+      indicator.textContent = !isActive ? "↕" : state.sortDirection === "asc" ? "↑" : "↓";
+    }
+  });
+}
+
+function setSubjectSort(sortKey) {
+  const state = getSubjectTableState();
+  if (state.sortKey === sortKey) {
+    state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+  } else {
+    state.sortKey = sortKey;
+    state.sortDirection = getDefaultSortDirection(sortKey);
+  }
+  state.page = 1;
+  syncSubjectSortUI();
+  updateSubjectTable();
+  updateAlarmBoard();
+}
+
+function setSubjectSortFromSelect() {
+  const selectedKey = normalizeText(document.getElementById("subjectSortBy")?.value || "risk");
+  const state = getSubjectTableState();
+  state.sortKey = selectedKey;
+  state.sortDirection = getDefaultSortDirection(selectedKey);
+  state.page = 1;
+  syncSubjectSortUI();
+  updateSubjectTable();
+  updateAlarmBoard();
+}
+
+function updateSubjectTable() {
+  const table = document.getElementById("subjectTable");
+  if (!table) {
+    return;
+  }
+
+  const state = getSubjectTableState();
+  const query = normalizeText(document.getElementById("subjectSearch")?.value);
+  const status = normalizeText(document.getElementById("subjectStatusFilter")?.value || "all");
+  const missingStep = normalizeText(document.getElementById("subjectMissingStepFilter")?.value || "all");
+  const pageSize = parseInt(document.getElementById("subjectPageSize")?.value || "20", 10);
+  const rows = Array.from(table.querySelectorAll("tbody tr[data-search]"));
+  const sortBy = state.sortKey || normalizeText(document.getElementById("subjectSortBy")?.value || "risk");
+  const sortDirection = state.sortDirection || getDefaultSortDirection(sortBy);
+  state.sortKey = sortBy;
+  state.sortDirection = sortDirection;
+
+  const matchedRows = rows.filter((row) => {
+    const haystack = normalizeText(row.dataset.search);
+    const rowStatus = normalizeText(row.dataset.status);
+    const rowMissing = normalizeText(row.dataset.missingSteps || "");
+    const queryMatch = !query || haystack.includes(query);
+    const statusMatch = status === "all" || rowStatus === status;
+    const missingMatch = missingStep === "all" || rowMissing.includes(missingStep);
+    return queryMatch && statusMatch && missingMatch;
+  });
+
+  matchedRows.sort((a, b) => {
+    return compareSubjectRows(a, b, sortBy, sortDirection);
+  });
+
+  const totalPages = Math.max(1, Math.ceil(matchedRows.length / pageSize));
+  if (state.page > totalPages) {
+    state.page = totalPages;
+  }
+  if (state.page < 1) {
+    state.page = 1;
+  }
+
+  rows.forEach((row) => row.classList.add("hide"));
+  const tbody = table.querySelector("tbody");
+  if (tbody) {
+    matchedRows.forEach((row) => tbody.appendChild(row));
+  }
+  const start = (state.page - 1) * pageSize;
+  const end = start + pageSize;
+  const visibleRows = matchedRows.slice(start, end);
+  visibleRows.forEach((row) => row.classList.remove("hide"));
+
+  const pageInfo = document.getElementById("subjectPageInfo");
+  if (pageInfo) {
+    pageInfo.textContent = `Page ${state.page} / ${totalPages}`;
+  }
+
+  const countInfo = document.getElementById("subjectCountInfo");
+  if (countInfo) {
+    countInfo.textContent = `Showing ${matchedRows.length === 0 ? 0 : start + 1}-${Math.min(end, matchedRows.length)} of ${matchedRows.length} matched subjects`;
+  }
+
+  const prevBtn = document.getElementById("subjectPrevBtn");
+  const nextBtn = document.getElementById("subjectNextBtn");
+  if (prevBtn) {
+    prevBtn.disabled = state.page <= 1;
+  }
+  if (nextBtn) {
+    nextBtn.disabled = state.page >= totalPages;
+  }
+
+  syncSubjectSortUI();
+  updateStepMatrix(matchedRows, visibleRows);
+}
+
+function setSubjectPage(delta) {
+  const state = getSubjectTableState();
+  state.page += delta;
+  updateSubjectTable();
+  updateAlarmBoard();
+}
+
+function resetSubjectPage() {
+  const state = getSubjectTableState();
+  state.page = 1;
+  updateSubjectTable();
+  updateAlarmBoard();
+}
+
+function filterAlarmRows(inputId, listId) {
+  updateAlarmBoard();
+}
+
+function updateAlarmBoard() {
+  const list = document.getElementById("alarmBoard");
+  if (!list) {
+    return;
+  }
+  const query = normalizeText(document.getElementById("alarmSearch")?.value);
+  const limit = parseInt(document.getElementById("subjectPageSize")?.value || "20", 10);
+  const rows = Array.from(list.querySelectorAll(".alarm-row[data-search]"));
+  const matchedRows = rows.filter((row) => {
+    const haystack = normalizeText(row.dataset.search);
+    return !query || haystack.includes(query);
+  });
+
+  rows.forEach((row) => row.classList.add("hide"));
+  matchedRows.slice(0, limit).forEach((row) => row.classList.remove("hide"));
+
+  const countInfo = document.getElementById("alarmCountInfo");
+  if (countInfo) {
+    countInfo.textContent = `Showing ${Math.min(limit, matchedRows.length)} of ${matchedRows.length} alarms`;
+  }
+}
+
+function renderBadSegmentTable() {
+  const body = document.getElementById("badSegmentTableBody");
+  if (!body) {
+    return;
+  }
+
+  const rows = getJsonScriptData("badSegmentRows").slice().sort((a, b) => {
+    const durationDelta = toNumber(b.duration_sec, 0) - toNumber(a.duration_sec, 0);
+    if (durationDelta !== 0) {
+      return durationDelta;
+    }
+    return toNumber(a.onset_sec, 0) - toNumber(b.onset_sec, 0);
+  });
+  const pageSize = parseInt(document.getElementById("badSegmentPageSize")?.value || "20", 10);
+  const state = getBadSegmentTableState();
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  if (state.page > totalPages) {
+    state.page = totalPages;
+  }
+  if (state.page < 1) {
+    state.page = 1;
+  }
+
+  const start = (state.page - 1) * pageSize;
+  const end = start + pageSize;
+  const visibleRows = rows.slice(start, end);
+
+  if (!visibleRows.length) {
+    body.innerHTML = '<tr><td colspan="4" class="small">No bad segments listed.</td></tr>';
+  } else {
+    body.innerHTML = visibleRows.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.index)}</td>
+        <td>${formatFixed(row.onset_sec, 3, " s")}</td>
+        <td>${formatFixed(row.duration_sec, 3, " s")}</td>
+        <td class="segment-description">${escapeHtml(row.description)}</td>
+      </tr>
+    `).join("");
+  }
+
+  const countInfo = document.getElementById("badSegmentCountInfo");
+  if (countInfo) {
+    countInfo.textContent = `Showing ${rows.length === 0 ? 0 : start + 1}-${Math.min(end, rows.length)} of ${rows.length} bad segments`;
+  }
+
+  const pageInfo = document.getElementById("badSegmentPageInfo");
+  if (pageInfo) {
+    pageInfo.textContent = `Page ${state.page} / ${totalPages}`;
+  }
+
+  const prevBtn = document.getElementById("badSegmentPrevBtn");
+  const nextBtn = document.getElementById("badSegmentNextBtn");
+  if (prevBtn) {
+    prevBtn.disabled = state.page <= 1;
+  }
+  if (nextBtn) {
+    nextBtn.disabled = state.page >= totalPages;
+  }
+}
+
+function setBadSegmentPage(delta) {
+  const state = getBadSegmentTableState();
+  state.page += delta;
+  renderBadSegmentTable();
+}
+
+function resetBadSegmentPage() {
+  const state = getBadSegmentTableState();
+  state.page = 1;
+  renderBadSegmentTable();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  syncSubjectSortUI();
+  updateSubjectTable();
+  updateAlarmBoard();
+  renderBadSegmentTable();
+});
+"""
+
+
+@dataclass
+class AssetRecord:
+    title: str
+    rel_path: str
+    category: str
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate a portable static HTML report package from MEGPrep outputs."
+    )
+    parser.add_argument(
+        "--report_root",
+        required=True,
+        help="Root report directory that contains the preprocessed outputs.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default=None,
+        help="Directory to write the static report package. Defaults to <report_root>/static_html_report.",
+    )
+    parser.add_argument(
+        "--bad_channel_threshold",
+        type=int,
+        default=DEFAULT_THRESHOLDS["bad_channel_threshold"],
+        help="Alarm threshold for bad channels.",
+    )
+    parser.add_argument(
+        "--bad_segment_threshold",
+        type=int,
+        default=DEFAULT_THRESHOLDS["bad_segment_threshold"],
+        help="Alarm threshold for bad segments.",
+    )
+    parser.add_argument(
+        "--coreg_mean_threshold",
+        type=float,
+        default=DEFAULT_THRESHOLDS["coreg_mean_threshold"],
+        help="Alarm threshold for coregistration mean distance in mm.",
+    )
+    parser.add_argument(
+        "--coreg_max_threshold",
+        type=float,
+        default=DEFAULT_THRESHOLDS["coreg_max_threshold"],
+        help="Alarm threshold for coregistration max distance in mm.",
+    )
+    parser.add_argument(
+        "--epoch_reject_rate_threshold",
+        type=float,
+        default=DEFAULT_THRESHOLDS["epoch_reject_rate_threshold"],
+        help="Alarm threshold for epoch rejection rate, 0-1.",
+    )
+    parser.add_argument(
+        "--zip_output",
+        type=str,
+        default="true",
+        help="Whether to create a zip archive next to the output directory. true/false.",
+    )
+    return parser.parse_args()
+
+
+def str_to_bool(value: str) -> bool:
+    value = str(value).strip().lower()
+    if value in {"true", "t", "1", "yes", "y"}:
+        return True
+    if value in {"false", "f", "0", "no", "n"}:
+        return False
+    raise ValueError(f"Unsupported boolean value: {value}")
+
+
+def ensure_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def sanitize_name(name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name.strip())
+    return safe.strip("._") or "subject"
+
+
+def html_text(value: Any) -> str:
+    return html.escape("" if value is None else str(value))
+
+
+def json_script_text(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+
+def fmt_float(value: Any, digits: int = 2, suffix: str = "") -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        return f"{float(value):.{digits}f}{suffix}"
+    except (TypeError, ValueError):
+        return html_text(value)
+
+
+def fmt_int(value: Any) -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        return f"{int(value)}"
+    except (TypeError, ValueError):
+        return html_text(value)
+
+
+def pick_evenly_spaced(items: list[Path], max_items: int) -> list[Path]:
+    if len(items) <= max_items:
+        return items
+    if max_items <= 1:
+        return [items[0]]
+    indexes = []
+    last_index = len(items) - 1
+    for i in range(max_items):
+        idx = round(i * last_index / (max_items - 1))
+        if idx not in indexes:
+            indexes.append(idx)
+    return [items[idx] for idx in indexes]
+
+
+def read_lines(file_path: Path) -> list[str]:
+    if not file_path.exists():
+        return []
+    with open(file_path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f.readlines() if line.strip()]
+
+
+def safe_json(file_path: Path) -> dict[str, Any]:
+    if not file_path.exists():
+        return {}
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def ensure_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def copy_asset(src: Path, output_root: Path, subject_slug: str, category: str) -> str:
+    ext = src.suffix.lower()
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".svg", ".json", ".csv", ".txt", ".jl", ".html"}:
+        category_dir = ensure_dir(output_root / "files" / subject_slug / category)
+        dest = category_dir / src.name
+        shutil.copy2(src, dest)
+        return dest.relative_to(output_root).as_posix()
+    raise ValueError(f"Unsupported asset type for copy: {src}")
+
+
+def copy_text_blob(text: str, output_root: Path, rel_path: Path) -> str:
+    dest = output_root / rel_path
+    ensure_dir(dest.parent)
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(text)
+    return dest.relative_to(output_root).as_posix()
+
+
+def find_subjects(preprocessed_dir: Path) -> list[str]:
+    subjects: set[str] = set()
+
+    if preprocessed_dir.exists():
+        for item in preprocessed_dir.iterdir():
+            if item.is_dir() and list(item.glob("*_preproc-raw.fif")):
+                subjects.add(item.name)
+
+    for step_name in [
+        "artifact_report",
+        "ica_report",
+        "trans",
+        "epochs",
+        "covariance",
+        "source_recon",
+        "forward_solution",
+    ]:
+        step_dir = preprocessed_dir / step_name
+        if step_dir.exists():
+            for item in step_dir.iterdir():
+                if item.is_dir():
+                    subjects.add(item.name)
+
+    return sorted(subjects)
+
+
+def resolve_report_dirs(report_root: Path) -> tuple[Path, Path]:
+    report_root = report_root.resolve()
+    direct_preprocessed = report_root / "preprocessed"
+    if direct_preprocessed.exists() and direct_preprocessed.is_dir():
+        return report_root, direct_preprocessed
+
+    if report_root.name == "preprocessed" and report_root.is_dir():
+        return report_root.parent, report_root
+
+    candidate_children = []
+    if report_root.exists() and report_root.is_dir():
+        for child in sorted(report_root.iterdir()):
+            child_preprocessed = child / "preprocessed"
+            if child_preprocessed.exists() and child_preprocessed.is_dir():
+                candidate_children.append(str(child))
+
+    message = (
+        f"Could not locate a 'preprocessed' directory under report_root: {report_root}. "
+        f"Please pass either the MEGPrep output root or the preprocessed directory itself."
+    )
+    if candidate_children:
+        message += " Available sibling output roots with preprocessed results: " + ", ".join(candidate_children[:8])
+    raise ValueError(message)
+
+
+def read_raw_info(raw_file: Path) -> dict[str, Any]:
+    try:
+        raw = mne.io.read_raw_fif(raw_file, preload=False, verbose="ERROR")
+        sfreq = float(raw.info["sfreq"])
+        n_channels = int(len(raw.ch_names))
+        duration = float(raw.n_times / sfreq) if sfreq else None
+        return {
+            "raw_file": str(raw_file),
+            "sfreq": sfreq,
+            "n_channels": n_channels,
+            "duration_sec": duration,
+        }
+    except Exception as exc:
+        return {
+            "raw_file": str(raw_file),
+            "sfreq": None,
+            "n_channels": None,
+            "duration_sec": None,
+            "error": str(exc),
+        }
+
+
+def parse_epochs_log(log_file: Path) -> dict[str, Any]:
+    data = {
+        "log_file": str(log_file) if log_file.exists() else None,
+        "rejected_epochs": [],
+        "remaining_epochs": None,
+        "total_epochs_est": None,
+        "reject_rate": None,
+    }
+    if not log_file.exists():
+        return data
+
+    with open(log_file, "r", encoding="utf-8") as f:
+        log_content = [line.strip() for line in f.readlines() if line.strip()]
+
+    if not log_content:
+        return data
+
+    try:
+        rejected_epochs = ast.literal_eval(log_content[0])
+        if not isinstance(rejected_epochs, list):
+            rejected_epochs = []
+        remaining_epochs = None
+        if len(log_content) > 1 and ":" in log_content[1]:
+            remaining_epochs = int(log_content[1].split(":")[-1].strip())
+        total_epochs_est = None
+        reject_rate = None
+        if remaining_epochs is not None:
+            total_epochs_est = remaining_epochs + len(rejected_epochs)
+            if total_epochs_est > 0:
+                reject_rate = len(rejected_epochs) / total_epochs_est
+        data.update(
+            {
+                "rejected_epochs": rejected_epochs,
+                "remaining_epochs": remaining_epochs,
+                "total_epochs_est": total_epochs_est,
+                "reject_rate": reject_rate,
+            }
+        )
+    except Exception as exc:
+        data["error"] = str(exc)
+
+    return data
+
+
+def select_artifact_images(artifact_dir: Path, max_overview: int = 3, max_waveform: int = 3) -> dict[str, list[Path]]:
+    result = {"overview": [], "waveform": []}
+    check_imgs_dir = artifact_dir / "check_imgs"
+    if not check_imgs_dir.exists():
+        return result
+
+    for plot_type, limit in [("overview", max_overview), ("waveform", max_waveform)]:
+        plot_dir = check_imgs_dir / plot_type
+        if not plot_dir.exists():
+            continue
+        channel_dirs = sorted(
+            [item for item in plot_dir.iterdir() if item.is_dir() and item.name.startswith("chn.")]
+        )
+        if not channel_dirs:
+            continue
+        target_dir = None
+        for candidate in channel_dirs:
+            if candidate.name == "chn.0":
+                target_dir = candidate
+                break
+        if target_dir is None:
+            target_dir = channel_dirs[0]
+
+        files = sorted(target_dir.glob("seg_*.jpg"))
+        result[plot_type] = pick_evenly_spaced(files, limit)
+
+    return result
+
+
+def collect_qa_images(search_roots: list[Path]) -> dict[str, Path]:
+    qa_files: dict[str, Path] = {}
+    wanted = [
+        "ica_overlay_mag.png",
+        "ica_overlay_grad.png",
+        "raw_psd.png",
+        "ica_psd.png",
+    ]
+    for file_name in wanted:
+        for root in search_roots:
+            if root and root.exists():
+                matches = list(root.rglob(file_name))
+                if matches:
+                    qa_files[file_name] = matches[0]
+                    break
+    return qa_files
+
+
+def parse_ica_topographies(ica_results_dir: Path) -> list[dict[str, Any]]:
+    topo_files = []
+    if not ica_results_dir.exists():
+        return topo_files
+    pattern = re.compile(r"(?P<component>\d+)_evar_(?P<evar>-?\d+\.?\d*)")
+    for file_path in ica_results_dir.glob("*.png"):
+        match = pattern.search(file_path.stem)
+        if not match:
+            continue
+        topo_files.append(
+            {
+                "path": file_path,
+                "component": int(match.group("component")),
+                "explained_var": float(match.group("evar")),
+            }
+        )
+    topo_files.sort(key=lambda item: item["component"])
+    return topo_files
+
+
+def parse_ica_sources(ica_results_dir: Path) -> list[dict[str, Any]]:
+    source_files = []
+    if not ica_results_dir.exists():
+        return source_files
+    pattern = re.compile(r"ica_comp_(?P<start>\d+)-(?P<end>\d+)_tc")
+    for file_path in ica_results_dir.glob("*.png"):
+        match = pattern.search(file_path.stem)
+        if not match:
+            continue
+        source_files.append(
+            {
+                "path": file_path,
+                "start": int(match.group("start")),
+                "end": int(match.group("end")),
+            }
+        )
+    source_files.sort(key=lambda item: item["start"])
+    return source_files
+
+
+def render_status_pill(status: str) -> str:
+    status_map = {
+        "PASS": ("good", "PASS"),
+        "WARN": ("warn", "WARN"),
+        "FAIL": ("danger", "FAIL"),
+        "MISSING": ("neutral", "MISSING"),
+    }
+    css_class, label = status_map.get(status, ("neutral", status))
+    return f'<span class="pill {css_class}">{html_text(label)}</span>'
+
+
+def collect_subject_data(
+    subject: str,
+    report_root: Path,
+    output_root: Path,
+    thresholds: dict[str, float],
+) -> dict[str, Any]:
+    preprocessed_dir = report_root / "preprocessed"
+    subject_slug = sanitize_name(subject)
+    subject_dir = preprocessed_dir / subject
+    artifact_dir = preprocessed_dir / "artifact_report" / subject
+    ica_dir = preprocessed_dir / "ica_report" / subject
+    trans_dir = preprocessed_dir / "trans" / subject
+    epochs_dir = preprocessed_dir / "epochs" / subject
+    covariance_dir = preprocessed_dir / "covariance" / subject
+    source_dir = preprocessed_dir / "source_recon" / subject
+    fwd_dir = preprocessed_dir / "forward_solution" / subject
+
+    raw_files = sorted(subject_dir.glob("*_preproc-raw.fif")) if subject_dir.exists() else []
+    raw_info = read_raw_info(raw_files[0]) if raw_files else {}
+
+    summary: dict[str, Any] = {
+        "subject": subject,
+        "subject_slug": subject_slug,
+        "raw_info": raw_info,
+        "files": [],
+        "steps": {},
+        "alarms": [],
+        "thresholds": thresholds,
+    }
+
+    # Artifacts
+    artifact_data = {
+        "bad_channels": [],
+        "bad_segments": 0,
+        "bad_duration_sec": None,
+        "bad_ratio": None,
+        "assets": [],
+        "bad_segment_rows": [],
+    }
+    bad_channels_file = next(iter(sorted(artifact_dir.glob("*_bad_channels.txt"))), None)
+    bad_segments_file = next(iter(sorted(artifact_dir.glob("*_bad_segments.txt"))), None)
+
+    if bad_channels_file:
+        artifact_data["bad_channels"] = read_lines(bad_channels_file)
+        rel = copy_asset(bad_channels_file, output_root, subject_slug, "artifacts")
+        artifact_data["bad_channels_rel"] = rel
+        summary["files"].append({"label": "Bad channels", "path": rel})
+
+    if bad_segments_file:
+        rel = copy_asset(bad_segments_file, output_root, subject_slug, "artifacts")
+        artifact_data["bad_segments_rel"] = rel
+        summary["files"].append({"label": "Bad segments", "path": rel})
+        try:
+            annotations = mne.read_annotations(str(bad_segments_file))
+            artifact_data["bad_segments"] = int(len(annotations))
+            artifact_data["bad_duration_sec"] = float(sum(annotations.duration))
+            artifact_data["bad_segment_rows"] = [
+                {
+                    "index": idx + 1,
+                    "onset_sec": float(onset),
+                    "duration_sec": float(duration),
+                    "description": str(description),
+                }
+                for idx, (onset, duration, description) in enumerate(
+                    zip(annotations.onset, annotations.duration, annotations.description)
+                )
+            ]
+            artifact_data["bad_segment_rows"].sort(
+                key=lambda row: (-float(row["duration_sec"]), float(row["onset_sec"]))
+            )
+            duration_sec = raw_info.get("duration_sec")
+            if duration_sec and duration_sec > 0:
+                artifact_data["bad_ratio"] = artifact_data["bad_duration_sec"] / duration_sec
+        except Exception as exc:
+            artifact_data["error"] = str(exc)
+
+    selected_artifact_images = select_artifact_images(artifact_dir)
+    for label, file_paths in selected_artifact_images.items():
+        for idx, file_path in enumerate(file_paths, start=1):
+            rel = copy_asset(file_path, output_root, subject_slug, "artifacts")
+            asset = AssetRecord(
+                title=f"{label.capitalize()} view {idx}",
+                rel_path=rel,
+                category="Artifacts",
+            )
+            artifact_data["assets"].append(asset.__dict__)
+
+    artifact_data["bad_channels_count"] = len(artifact_data["bad_channels"])
+    artifact_data["exists"] = artifact_dir.exists() and (
+        bool(bad_channels_file) or bool(bad_segments_file) or bool(artifact_data["assets"])
+    )
+    summary["artifacts"] = artifact_data
+    summary["steps"]["artifacts"] = artifact_data["exists"]
+
+    # ICA
+    ica_data = {
+        "marked_components": [],
+        "marked_count": 0,
+        "ecg_indices": [],
+        "eog_indices": [],
+        "ecg_scores": [],
+        "eog_scores": [],
+        "topographies": [],
+        "sources": [],
+        "qa_assets": [],
+    }
+    marked_file = ica_dir / "marked_components.txt"
+    scores_file = ica_dir / "ecg_eog_scores.json"
+    ica_results_dir = ica_dir / "ica_results"
+    if marked_file.exists():
+        marked_components = []
+        for line in read_lines(marked_file):
+            try:
+                marked_components.append(int(line))
+            except ValueError:
+                continue
+        ica_data["marked_components"] = sorted(marked_components)
+        ica_data["marked_count"] = len(ica_data["marked_components"])
+        rel = copy_asset(marked_file, output_root, subject_slug, "ica")
+        summary["files"].append({"label": "ICA marked components", "path": rel})
+
+    if scores_file.exists():
+        scores = safe_json(scores_file)
+        ica_data["ecg_indices"] = ensure_list(scores.get("ecg_indices", []))
+        ica_data["eog_indices"] = ensure_list(scores.get("eog_indices", []))
+        ica_data["ecg_scores"] = ensure_list(scores.get("ecg", []))
+        ica_data["eog_scores"] = ensure_list(scores.get("eog", []))
+        rel = copy_asset(scores_file, output_root, subject_slug, "ica")
+        summary["files"].append({"label": "ICA ECG/EOG scores", "path": rel})
+
+    topo_files = parse_ica_topographies(ica_results_dir)
+    source_files = parse_ica_sources(ica_results_dir)
+    marked_set = set(ica_data["marked_components"])
+    marked_topos = [item for item in topo_files if item["component"] in marked_set]
+    remaining_topos = [item for item in topo_files if item["component"] not in marked_set]
+    remaining_topos.sort(key=lambda item: item["explained_var"], reverse=True)
+    selected_topos = marked_topos[:6]
+    for topo in remaining_topos:
+        if len(selected_topos) >= 6:
+            break
+        selected_topos.append(topo)
+
+    for topo in selected_topos:
+        rel = copy_asset(topo["path"], output_root, subject_slug, "ica")
+        ica_data["topographies"].append(
+            {
+                "component": topo["component"],
+                "explained_var": topo["explained_var"],
+                "rel_path": rel,
+            }
+        )
+
+    for source_item in pick_evenly_spaced([item["path"] for item in source_files], 3):
+        match = next((item for item in source_files if item["path"] == source_item), None)
+        rel = copy_asset(source_item, output_root, subject_slug, "ica")
+        title = "ICA source group"
+        if match:
+            title = f"ICA sources {match['start']}-{match['end']}"
+        ica_data["sources"].append({"title": title, "rel_path": rel})
+
+    qa_images = collect_qa_images([subject_dir, ica_dir])
+    for name, file_path in qa_images.items():
+        rel = copy_asset(file_path, output_root, subject_slug, "preproc")
+        ica_data["qa_assets"].append({"title": name, "rel_path": rel})
+        summary["files"].append({"label": name, "path": rel})
+
+    ica_data["has_ecg"] = len(ica_data["ecg_indices"]) > 0
+    ica_data["has_eog"] = len(ica_data["eog_indices"]) > 0
+    ica_data["n_components"] = len(topo_files)
+    ica_data["exists"] = ica_dir.exists() and (
+        marked_file.exists() or scores_file.exists() or bool(topo_files) or bool(source_files)
+    )
+    summary["ica"] = ica_data
+    summary["steps"]["ica"] = ica_data["exists"]
+
+    # Coregistration
+    coreg_data = {
+        "dist_mean": None,
+        "dist_max": None,
+        "dist_min": None,
+        "assets": [],
+        "exists": False,
+    }
+    dists_file = trans_dir / "dists.csv"
+    if dists_file.exists():
+        try:
+            df = pd.read_csv(dists_file)
+            if not df.empty:
+                row = df.iloc[0]
+                coreg_data["dist_mean"] = row.get("dist_mean(mm)")
+                coreg_data["dist_max"] = row.get("dist_max(mm)")
+                coreg_data["dist_min"] = row.get("dist_min(mm)")
+            rel = copy_asset(dists_file, output_root, subject_slug, "coreg")
+            summary["files"].append({"label": "Coreg distances", "path": rel})
+        except Exception as exc:
+            coreg_data["error"] = str(exc)
+
+    for file_path in sorted(trans_dir.glob("*.png")):
+        rel = copy_asset(file_path, output_root, subject_slug, "coreg")
+        coreg_data["assets"].append({"title": file_path.stem, "rel_path": rel})
+    coreg_data["exists"] = trans_dir.exists() and (dists_file.exists() or bool(coreg_data["assets"]))
+    summary["coregistration"] = coreg_data
+    summary["steps"]["coregistration"] = coreg_data["exists"]
+
+    # Head model
+    headmodel_data = {"assets": [], "exists": False}
+    for file_path in sorted(fwd_dir.glob("headmodel_*.png")):
+        rel = copy_asset(file_path, output_root, subject_slug, "headmodel")
+        headmodel_data["assets"].append({"title": file_path.stem, "rel_path": rel})
+    headmodel_data["exists"] = bool(headmodel_data["assets"])
+    summary["headmodel"] = headmodel_data
+    summary["steps"]["headmodel"] = headmodel_data["exists"]
+
+    # Covariance
+    covariance_data = {"assets": [], "exists": False}
+    for file_name in ["bl_cov.png", "bl_cov_spectra.png"]:
+        file_path = covariance_dir / file_name
+        if file_path.exists():
+            rel = copy_asset(file_path, output_root, subject_slug, "covariance")
+            covariance_data["assets"].append({"title": file_name, "rel_path": rel})
+    covariance_data["exists"] = bool(covariance_data["assets"])
+    summary["covariance"] = covariance_data
+    summary["steps"]["covariance"] = covariance_data["exists"]
+
+    # Epochs
+    epochs_data = {"assets": [], "exists": False}
+    reject_log = next(iter(sorted(epochs_dir.glob("*reject_epoch_log.txt"))), None)
+    epochs_data.update(parse_epochs_log(reject_log) if reject_log else parse_epochs_log(Path("__missing__")))
+    if reject_log and reject_log.exists():
+        rel = copy_asset(reject_log, output_root, subject_slug, "epochs")
+        summary["files"].append({"label": "Epoch reject log", "path": rel})
+        epochs_data["log_rel_path"] = rel
+    epoch_pngs = sorted(epochs_dir.glob("*.png"))
+    for file_path in epoch_pngs:
+        rel = copy_asset(file_path, output_root, subject_slug, "epochs")
+        epochs_data["assets"].append({"title": file_path.name, "rel_path": rel})
+    epochs_data["exists"] = epochs_dir.exists() and (bool(epoch_pngs) or bool(reject_log))
+    summary["epochs"] = epochs_data
+    summary["steps"]["epochs"] = epochs_data["exists"]
+
+    # Source localization
+    source_data = {"assets": [], "exists": False}
+    png_files = sorted(source_dir.glob("*.png"))
+    for file_path in pick_evenly_spaced(png_files, 8):
+        rel = copy_asset(file_path, output_root, subject_slug, "source")
+        source_data["assets"].append({"title": file_path.name, "rel_path": rel})
+    source_data["exists"] = bool(png_files)
+    summary["source"] = source_data
+    summary["steps"]["source"] = source_data["exists"]
+
+    alarms: list[dict[str, str]] = []
+
+    if not artifact_data["exists"]:
+        alarms.append({"category": "Completeness", "severity": "warn", "message": "Artifact outputs are missing."})
+    else:
+        if artifact_data["bad_channels_count"] > thresholds["bad_channel_threshold"]:
+            alarms.append(
+                {
+                    "category": "Artifacts",
+                    "severity": "warn",
+                    "message": (
+                        f"Excessive bad channels: {artifact_data['bad_channels_count']} "
+                        f"(threshold: {int(thresholds['bad_channel_threshold'])})"
+                    ),
+                }
+            )
+        if artifact_data["bad_segments"] > thresholds["bad_segment_threshold"]:
+            alarms.append(
+                {
+                    "category": "Artifacts",
+                    "severity": "warn",
+                    "message": (
+                        f"Excessive bad segments: {artifact_data['bad_segments']} "
+                        f"(threshold: {int(thresholds['bad_segment_threshold'])})"
+                    ),
+                }
+            )
+
+    if not ica_data["exists"]:
+        alarms.append({"category": "Completeness", "severity": "warn", "message": "ICA outputs are missing."})
+    else:
+        if not ica_data["has_ecg"]:
+            alarms.append({"category": "ICA", "severity": "warn", "message": "No ECG-related components detected."})
+        elif ica_data["marked_count"] == 0:
+            alarms.append(
+                {
+                    "category": "ICA",
+                    "severity": "warn",
+                    "message": "ECG-related components detected but none marked.",
+                }
+            )
+
+        if not ica_data["has_eog"]:
+            alarms.append({"category": "ICA", "severity": "warn", "message": "No EOG-related components detected."})
+        elif ica_data["marked_count"] == 0:
+            alarms.append(
+                {
+                    "category": "ICA",
+                    "severity": "warn",
+                    "message": "EOG-related components detected but none marked.",
+                }
+            )
+
+    if not coreg_data["exists"]:
+        alarms.append({"category": "Completeness", "severity": "warn", "message": "Coregistration outputs are missing."})
+    else:
+        if coreg_data["dist_mean"] is not None and float(coreg_data["dist_mean"]) > thresholds["coreg_mean_threshold"]:
+            alarms.append(
+                {
+                    "category": "Coregistration",
+                    "severity": "danger",
+                    "message": (
+                        f"Mean coreg distance {fmt_float(coreg_data['dist_mean'], 2, ' mm')} "
+                        f"exceeds threshold {fmt_float(thresholds['coreg_mean_threshold'], 2, ' mm')}."
+                    ),
+                }
+            )
+        if coreg_data["dist_max"] is not None and float(coreg_data["dist_max"]) > thresholds["coreg_max_threshold"]:
+            alarms.append(
+                {
+                    "category": "Coregistration",
+                    "severity": "danger",
+                    "message": (
+                        f"Max coreg distance {fmt_float(coreg_data['dist_max'], 2, ' mm')} "
+                        f"exceeds threshold {fmt_float(thresholds['coreg_max_threshold'], 2, ' mm')}."
+                    ),
+                }
+            )
+
+    if epochs_data["exists"] and epochs_data.get("reject_rate") is not None:
+        if float(epochs_data["reject_rate"]) > thresholds["epoch_reject_rate_threshold"]:
+            alarms.append(
+                {
+                    "category": "Epochs",
+                    "severity": "warn",
+                    "message": (
+                        f"Epoch rejection rate {fmt_float(epochs_data['reject_rate'] * 100, 1, '%')} "
+                        f"exceeds threshold {fmt_float(thresholds['epoch_reject_rate_threshold'] * 100, 1, '%')}."
+                    ),
+                }
+            )
+
+    summary["alarms"] = alarms
+    summary["alarm_count"] = len(alarms)
+    if len(alarms) >= 3 or any(alarm["severity"] == "danger" for alarm in alarms):
+        summary["status"] = "FAIL"
+    elif len(alarms) >= 1:
+        summary["status"] = "WARN"
+    else:
+        summary["status"] = "PASS"
+
+    subject_json_rel = copy_text_blob(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        output_root,
+        Path("data") / "subjects" / f"{subject_slug}.json",
+    )
+    summary["summary_json"] = subject_json_rel
+    summary["files"].append({"label": "Subject summary JSON", "path": subject_json_rel})
+
+    return summary
+
+
+def build_dataset_summary(
+    report_root: Path,
+    output_root: Path,
+    subject_summaries: list[dict[str, Any]],
+    thresholds: dict[str, float],
+) -> dict[str, Any]:
+    step_names = [key for key, _ in STEP_DEFS]
+    total_subjects = len(subject_summaries)
+    pass_count = sum(1 for item in subject_summaries if item["status"] == "PASS")
+    warn_count = sum(1 for item in subject_summaries if item["status"] == "WARN")
+    fail_count = sum(1 for item in subject_summaries if item["status"] == "FAIL")
+
+    def avg(values: list[float | None]) -> float | None:
+        cleaned = [float(v) for v in values if v is not None]
+        if not cleaned:
+            return None
+        return sum(cleaned) / len(cleaned)
+
+    dataset_summary = {
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "report_root": str(report_root),
+        "output_root": str(output_root),
+        "thresholds": thresholds,
+        "total_subjects": total_subjects,
+        "pass_count": pass_count,
+        "warn_count": warn_count,
+        "fail_count": fail_count,
+        "alarm_count": sum(item["alarm_count"] for item in subject_summaries),
+        "averages": {
+            "bad_channels": avg([item["artifacts"]["bad_channels_count"] for item in subject_summaries]),
+            "bad_segments": avg([item["artifacts"]["bad_segments"] for item in subject_summaries]),
+            "coreg_mean_mm": avg([item["coregistration"]["dist_mean"] for item in subject_summaries]),
+            "coreg_max_mm": avg([item["coregistration"]["dist_max"] for item in subject_summaries]),
+            "epoch_reject_rate": avg([item["epochs"].get("reject_rate") for item in subject_summaries]),
+        },
+        "step_completion": {
+            step: sum(1 for item in subject_summaries if item["steps"].get(step)) for step in step_names
+        },
+        "subjects": [
+            {
+                "subject": item["subject"],
+                "subject_slug": item["subject_slug"],
+                "status": item["status"],
+                "alarm_count": item["alarm_count"],
+                "bad_channels": item["artifacts"]["bad_channels_count"],
+                "bad_segments": item["artifacts"]["bad_segments"],
+                "marked_ica": item["ica"]["marked_count"],
+                "coreg_mean": item["coregistration"]["dist_mean"],
+                "coreg_max": item["coregistration"]["dist_max"],
+                "epoch_reject_rate": item["epochs"].get("reject_rate"),
+            }
+            for item in subject_summaries
+        ],
+    }
+
+    dataset_json_path = output_root / "data" / "dataset_summary.json"
+    ensure_dir(dataset_json_path.parent)
+    with open(dataset_json_path, "w", encoding="utf-8") as f:
+        json.dump(dataset_summary, f, ensure_ascii=False, indent=2)
+
+    csv_path = output_root / "data" / "subjects.csv"
+    ensure_dir(csv_path.parent)
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "subject",
+                "status",
+                "alarm_count",
+                "bad_channels",
+                "bad_segments",
+                "marked_ica",
+                "coreg_mean_mm",
+                "coreg_max_mm",
+                "epoch_reject_rate",
+                "artifacts",
+                "ica",
+                "coregistration",
+                "headmodel",
+                "epochs",
+                "covariance",
+                "source",
+            ]
+        )
+        for item in subject_summaries:
+            writer.writerow(
+                [
+                    item["subject"],
+                    item["status"],
+                    item["alarm_count"],
+                    item["artifacts"]["bad_channels_count"],
+                    item["artifacts"]["bad_segments"],
+                    item["ica"]["marked_count"],
+                    item["coregistration"]["dist_mean"],
+                    item["coregistration"]["dist_max"],
+                    item["epochs"].get("reject_rate"),
+                    item["steps"].get("artifacts"),
+                    item["steps"].get("ica"),
+                    item["steps"].get("coregistration"),
+                    item["steps"].get("headmodel"),
+                    item["steps"].get("epochs"),
+                    item["steps"].get("covariance"),
+                    item["steps"].get("source"),
+                ]
+            )
+
+    return dataset_summary
+
+
+def render_file_rows(file_items: list[dict[str, str]], prefix: str = "") -> str:
+    if not file_items:
+        return '<div class="small">No packaged sidecar files for this section.</div>'
+    rows = []
+    for item in file_items:
+        rows.append(
+            f"""
+            <div class="path-row">
+              <div><strong>{html_text(item['label'])}</strong></div>
+              <div class="small"><a href="{prefix}{html_text(item['path'])}" target="_blank">{html_text(item['path'])}</a></div>
+            </div>
+            """
+        )
+    return '<div class="path-list">' + "".join(rows) + "</div>"
+
+
+def render_gallery(assets: list[dict[str, Any]], prefix: str = "") -> str:
+    if not assets:
+        return '<div class="small">No images packaged for this section.</div>'
+    blocks = []
+    for asset in assets:
+        title = html_text(asset.get("title", "Figure"))
+        rel = html_text(prefix + asset["rel_path"])
+        figure_class = html_text(asset.get("figure_class", "")).strip()
+        badge = asset.get("badge")
+        badge_html = ""
+        if isinstance(badge, dict) and badge.get("text"):
+            badge_text = html_text(badge.get("text", ""))
+            badge_class = html_text(badge.get("class", "neutral"))
+            badge_html = f'<div class="figure-badge {badge_class}">{badge_text}</div>'
+        blocks.append(
+            f"""
+            <div class="figure {figure_class}">
+              {badge_html}
+              <a href="{rel}" target="_blank"><img src="{rel}" alt="{title}"></a>
+              <div class="caption">{title}</div>
+            </div>
+            """
+        )
+    return '<div class="gallery">' + "".join(blocks) + "</div>"
+
+
+def render_alarm_items(alarms: list[dict[str, str]]) -> str:
+    if not alarms:
+        return '<div class="small">No alarms. This subject passed the current static thresholds.</div>'
+    items = []
+    for alarm in alarms:
+        css_class = "danger" if alarm["severity"] == "danger" else ""
+        items.append(
+            f"""
+            <div class="alarm-item {css_class}">
+              <div class="category">{html_text(alarm['category'])}</div>
+              <div>{html_text(alarm['message'])}</div>
+            </div>
+            """
+        )
+    return '<div class="alarm-list">' + "".join(items) + "</div>"
+
+
+def render_step_snapshot(summary: dict[str, Any], compact: bool = False) -> str:
+    parts = []
+    for key, label in STEP_DEFS:
+        is_ready = bool(summary["steps"].get(key))
+        css = "good" if is_ready else "missing"
+        text = label if compact else f"{label}: {'ready' if is_ready else 'missing'}"
+        parts.append(
+            f'<span class="snapshot-item {css}"><span class="snapshot-dot"></span>{html_text(text)}</span>'
+        )
+    return '<div class="snapshot-grid">' + "".join(parts) + "</div>"
+
+
+def render_bad_channel_block(channels: list[str], max_inline: int = 18) -> str:
+    if not channels:
+        return '<div class="small">No bad channels listed.</div>'
+    inline = channels[:max_inline]
+    chips = "".join(f'<span class="chip">{html_text(ch)}</span>' for ch in inline)
+    extra_note = ""
+    if len(channels) > max_inline:
+        extra_note = f'<div class="info-note">Showing first {max_inline} of {len(channels)} bad channels. Full list is scrollable below.</div>'
+    table_rows = "".join(
+        f"<tr><td>{idx + 1}</td><td>{html_text(ch)}</td></tr>" for idx, ch in enumerate(channels)
+    )
+    return (
+        f'<div class="chips">{chips}</div>'
+        f"{extra_note}"
+        f'<div class="scroll-box" style="margin-top:10px"><table class="detail-table"><thead><tr><th>#</th><th>Channel</th></tr></thead><tbody>{table_rows}</tbody></table></div>'
+    )
+
+
+def render_bad_segment_block(rows: list[dict[str, Any]], page_size: int = 20) -> str:
+    if not rows:
+        return '<div class="small">No bad segments listed.</div>'
+    controls_html = ""
+    if len(rows) > 5:
+        controls_html = (
+            '<div class="subject-table-controls" style="margin-top:10px">'
+            '  <div class="table-count" id="badSegmentCountInfo">Showing 0 of 0 bad segments</div>'
+            '  <div class="inline-controls">'
+            '    <label for="badSegmentPageSize">Page Size</label>'
+            f'    <select id="badSegmentPageSize" onchange="resetBadSegmentPage()">'
+            f'      <option value="5">5 / page</option>'
+            f'      <option value="{page_size}" selected>{page_size} / page</option>'
+            '      <option value="50">50 / page</option>'
+            '      <option value="100">100 / page</option>'
+            '    </select>'
+            '    <div class="pager">'
+            '      <button id="badSegmentPrevBtn" onclick="setBadSegmentPage(-1)">Previous</button>'
+            '      <span id="badSegmentPageInfo" class="table-count">Page 1 / 1</span>'
+            '      <button id="badSegmentNextBtn" onclick="setBadSegmentPage(1)">Next</button>'
+            '    </div>'
+            '  </div>'
+            '</div>'
+        )
+    return (
+        f"{controls_html}"
+        '<div class="info-note">Bad segments are sorted by duration from longest to shortest for faster artifact review.</div>'
+        '<div class="scroll-box">'
+        '  <table class="detail-table">'
+        '    <thead><tr><th>#</th><th>Onset</th><th>Duration</th><th>Description</th></tr></thead>'
+        '    <tbody id="badSegmentTableBody"></tbody>'
+        '  </table>'
+        '</div>'
+        f'<script id="badSegmentRows" type="application/json">{json_script_text(rows)}</script>'
+    )
+
+
+def build_subject_html(summary: dict[str, Any], output_root: Path) -> None:
+    subject = summary["subject"]
+    status_html = render_status_pill(summary["status"])
+    raw_info = summary.get("raw_info", {})
+    marked_component_set = set(summary["ica"].get("marked_components", []))
+
+    step_chips = []
+    subject_step_labels = {
+        "artifacts": "Artifacts",
+        "ica": "ICA",
+        "coregistration": "Coreg",
+        "headmodel": "Head Model",
+        "epochs": "Epochs",
+        "covariance": "Covariance",
+        "source": "Source",
+    }
+    for key, _ in STEP_DEFS:
+        label = subject_step_labels[key]
+        css = "good" if summary["steps"].get(key) else "neutral"
+        state = "ready" if summary["steps"].get(key) else "missing"
+        step_chips.append(f'<span class="pill {css}">{label}: {state}</span>')
+
+    qa_assets = []
+    qa_assets.extend(summary["ica"]["qa_assets"])
+    ica_topography_assets = [
+        {
+            "title": (
+                f"Marked abnormal IC {item['component']} | EVAR {fmt_float(item['explained_var'], 3)}"
+                if item["component"] in marked_component_set
+                else f"Reference IC {item['component']} | EVAR {fmt_float(item['explained_var'], 3)}"
+            ),
+            "rel_path": item["rel_path"],
+            "figure_class": "flagged" if item["component"] in marked_component_set else "",
+            "badge": (
+                {"text": "Detected abnormal component", "class": "warn"}
+                if item["component"] in marked_component_set
+                else {"text": "Reference component", "class": "neutral"}
+            ),
+        }
+        for item in summary["ica"]["topographies"]
+    ]
+
+    content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html_text(subject)} - MEGPrep Static Report</title>
+  <link rel="stylesheet" href="../assets/report.css">
+  <script src="../assets/report.js"></script>
+</head>
+<body>
+  <div class="container">
+    <a class="back-link" href="../index.html">&larr; Back to dataset summary</a>
+    <div class="hero">
+      <div class="eyebrow">Subject QC Detail</div>
+      <h1>{html_text(subject)}</h1>
+      <p>Portable static subject report. All linked figures and sidecar files are bundled inside this report package.</p>
+      <div class="hero-links">
+        {status_html}
+        <span class="pill neutral">Alarms: {summary['alarm_count']}</span>
+        <span class="pill neutral">Raw duration: {fmt_float(raw_info.get('duration_sec'), 1, ' s')}</span>
+        <span class="pill neutral">Channels: {fmt_int(raw_info.get('n_channels'))}</span>
+        <span class="pill neutral">Sampling rate: {fmt_float(raw_info.get('sfreq'), 1, ' Hz')}</span>
+      </div>
+      <div class="hero-links">
+        {''.join(step_chips)}
+      </div>
+    </div>
+
+    <div class="grid cards">
+      <div class="card">
+        <div class="label">Bad Channels</div>
+        <div class="value">{fmt_int(summary['artifacts']['bad_channels_count'])}</div>
+        <div class="subvalue">Threshold {fmt_int(summary['thresholds']['bad_channel_threshold'])} in static QC</div>
+      </div>
+      <div class="card">
+        <div class="label">Bad Segments</div>
+        <div class="value">{fmt_int(summary['artifacts']['bad_segments'])}</div>
+        <div class="subvalue">Annotated bad duration {fmt_float(summary['artifacts'].get('bad_duration_sec'), 1, ' s')}</div>
+      </div>
+      <div class="card">
+        <div class="label">Marked ICA Components</div>
+        <div class="value">{fmt_int(summary['ica']['marked_count'])}</div>
+        <div class="subvalue">ECG: {'yes' if summary['ica']['has_ecg'] else 'no'} | EOG: {'yes' if summary['ica']['has_eog'] else 'no'}</div>
+      </div>
+      <div class="card">
+        <div class="label">Coreg Mean / Max</div>
+        <div class="value">{fmt_float(summary['coregistration']['dist_mean'], 2, ' mm')}</div>
+        <div class="subvalue">Max {fmt_float(summary['coregistration']['dist_max'], 2, ' mm')}</div>
+      </div>
+      <div class="card">
+        <div class="label">Epoch Reject Rate</div>
+        <div class="value">{fmt_float((summary['epochs'].get('reject_rate') * 100) if summary['epochs'].get('reject_rate') is not None else None, 1, '%')}</div>
+        <div class="subvalue">Rejected {len(summary['epochs'].get('rejected_epochs', []))} / Estimated total {fmt_int(summary['epochs'].get('total_epochs_est'))}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Alarms</h2>
+      <div class="panel">
+        {render_alarm_items(summary['alarms'])}
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Key Metrics</h2>
+      <div class="panel">
+        <div class="metric-list">
+          <div class="metric-box wide"><div class="k">Raw File</div><div class="v wrap mono-path">{html_text(raw_info.get('raw_file', 'N/A'))}</div></div>
+          <div class="metric-box"><div class="k">Bad Channel Ratio</div><div class="v">{fmt_float((summary['artifacts']['bad_channels_count'] / raw_info['n_channels'] * 100) if raw_info.get('n_channels') else None, 1, '%')}</div></div>
+          <div class="metric-box"><div class="k">Bad Segment Ratio</div><div class="v">{fmt_float((summary['artifacts'].get('bad_ratio') * 100) if summary['artifacts'].get('bad_ratio') is not None else None, 1, '%')}</div></div>
+          <div class="metric-box"><div class="k">ICA Components</div><div class="v">{fmt_int(summary['ica']['n_components'])}</div></div>
+          <div class="metric-box"><div class="k">Epochs Remaining</div><div class="v">{fmt_int(summary['epochs'].get('remaining_epochs'))}</div></div>
+          <div class="metric-box"><div class="k">Summary JSON</div><div class="v"><a href="../{html_text(summary['summary_json'])}" target="_blank">Open</a></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Preprocessing QA</h2>
+      <div class="panel">
+        {render_gallery(qa_assets, prefix="../")}
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Artifact Review</h2>
+      <div class="two-col">
+        <div class="panel">
+          {render_gallery(summary['artifacts']['assets'], prefix="../")}
+        </div>
+        <div class="panel">
+          <div class="metric-list">
+            <div class="metric-box"><div class="k">Bad Channels</div><div class="v">{fmt_int(summary['artifacts']['bad_channels_count'])}</div></div>
+            <div class="metric-box"><div class="k">Bad Segments</div><div class="v">{fmt_int(summary['artifacts']['bad_segments'])}</div></div>
+            <div class="metric-box"><div class="k">Bad Duration</div><div class="v">{fmt_float(summary['artifacts'].get('bad_duration_sec'), 1, ' s')}</div></div>
+            <div class="metric-box"><div class="k">Bad Ratio</div><div class="v">{fmt_float((summary['artifacts'].get('bad_ratio') * 100) if summary['artifacts'].get('bad_ratio') is not None else None, 1, '%')}</div></div>
+          </div>
+          <div class="section">
+            <h2>Bad Channel List</h2>
+            {render_bad_channel_block(summary['artifacts']['bad_channels'])}
+          </div>
+          <div class="section">
+            <h2>Bad Segments Detail</h2>
+            {render_bad_segment_block(summary['artifacts'].get('bad_segment_rows', []))}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>ICA Review</h2>
+      <div class="two-col">
+        <div class="panel">
+          <div class="info-note" style="margin-top:0; margin-bottom:12px">Detected abnormal ICA components are shown first and highlighted with a warm badge and border. Unmarked components are retained as reference views.</div>
+          {render_gallery(
+              ica_topography_assets,
+              prefix="../"
+          )}
+        </div>
+        <div class="panel">
+          <div class="metric-list">
+            <div class="metric-box"><div class="k">Marked Components</div><div class="v">{fmt_int(summary['ica']['marked_count'])}</div></div>
+            <div class="metric-box"><div class="k">ECG Candidates</div><div class="v">{fmt_int(len(summary['ica']['ecg_indices']))}</div></div>
+            <div class="metric-box"><div class="k">EOG Candidates</div><div class="v">{fmt_int(len(summary['ica']['eog_indices']))}</div></div>
+            <div class="metric-box"><div class="k">Components Total</div><div class="v">{fmt_int(summary['ica']['n_components'])}</div></div>
+          </div>
+          <div class="section">
+            <h2>Marked Components</h2>
+            <div class="chips">{''.join(f'<span class="chip">IC {html_text(comp)}</span>' for comp in summary['ica']['marked_components']) or '<span class="small">No marked components saved.</span>'}</div>
+          </div>
+          <div class="section">
+            <h2>Source Blocks</h2>
+            {render_gallery(summary['ica']['sources'], prefix="../")}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Coregistration</h2>
+      <div class="panel">
+        <div class="metric-list">
+          <div class="metric-box"><div class="k">Mean Distance</div><div class="v">{fmt_float(summary['coregistration']['dist_mean'], 2, ' mm')}</div></div>
+          <div class="metric-box"><div class="k">Max Distance</div><div class="v">{fmt_float(summary['coregistration']['dist_max'], 2, ' mm')}</div></div>
+          <div class="metric-box"><div class="k">Min Distance</div><div class="v">{fmt_float(summary['coregistration']['dist_min'], 2, ' mm')}</div></div>
+        </div>
+        <div class="section">
+          {render_gallery(summary['coregistration']['assets'], prefix="../")}
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Epochs and Covariance</h2>
+      <div class="two-col">
+        <div class="panel">
+          <div class="metric-list">
+            <div class="metric-box"><div class="k">Rejected Epochs</div><div class="v">{fmt_int(len(summary['epochs'].get('rejected_epochs', [])))}</div></div>
+            <div class="metric-box"><div class="k">Remaining Epochs</div><div class="v">{fmt_int(summary['epochs'].get('remaining_epochs'))}</div></div>
+            <div class="metric-box"><div class="k">Estimated Total</div><div class="v">{fmt_int(summary['epochs'].get('total_epochs_est'))}</div></div>
+            <div class="metric-box"><div class="k">Reject Rate</div><div class="v">{fmt_float((summary['epochs'].get('reject_rate') * 100) if summary['epochs'].get('reject_rate') is not None else None, 1, '%')}</div></div>
+          </div>
+          <div class="section">
+            {render_gallery(summary['epochs']['assets'], prefix="../")}
+          </div>
+        </div>
+        <div class="panel">
+          {render_gallery(summary['covariance']['assets'], prefix="../")}
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Head Model and Source Localization</h2>
+      <div class="two-col">
+        <div class="panel">
+          {render_gallery(summary['headmodel']['assets'], prefix="../")}
+        </div>
+        <div class="panel">
+          {render_gallery(summary['source']['assets'], prefix="../")}
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Packaged Sidecar Files</h2>
+      <div class="panel">
+        {render_file_rows(summary['files'], prefix="../")}
+      </div>
+    </div>
+
+    <div class="footer">
+      Generated by MEGPrep static HTML report generator on {html_text(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}.
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+    subject_html_path = output_root / "subjects" / f"{summary['subject_slug']}.html"
+    ensure_dir(subject_html_path.parent)
+    with open(subject_html_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def build_index_html(dataset_summary: dict[str, Any], subject_summaries: list[dict[str, Any]], output_root: Path) -> None:
+    sorted_subjects = sorted(subject_summaries, key=lambda item: (-item["alarm_count"], item["subject"]))
+    threshold_counts = {
+        "bad_channels": 0,
+        "bad_segments": 0,
+        "coreg_mean": 0,
+        "epoch_reject": 0,
+        "missing_steps": 0,
+    }
+    subject_rows = []
+    for summary in sorted_subjects:
+        bad_channels = summary["artifacts"]["bad_channels_count"]
+        bad_segments = summary["artifacts"]["bad_segments"]
+        coreg_mean = summary["coregistration"]["dist_mean"]
+        epoch_reject_rate = summary["epochs"].get("reject_rate")
+        missing_steps = [key for key, enabled in summary["steps"].items() if not enabled]
+        missing_steps_str = ",".join(missing_steps)
+        risk_score = summary["alarm_count"] * 100
+        risk_score += bad_channels
+        risk_score += bad_segments
+        risk_score += int((epoch_reject_rate or 0) * 100)
+        risk_score += len(missing_steps) * 25
+        if coreg_mean is not None:
+            risk_score += int(float(coreg_mean) * 10)
+
+        if bad_channels > summary["thresholds"]["bad_channel_threshold"]:
+            threshold_counts["bad_channels"] += 1
+        if bad_segments > summary["thresholds"]["bad_segment_threshold"]:
+            threshold_counts["bad_segments"] += 1
+        if coreg_mean is not None and float(coreg_mean) > summary["thresholds"]["coreg_mean_threshold"]:
+            threshold_counts["coreg_mean"] += 1
+        if epoch_reject_rate is not None and float(epoch_reject_rate) > summary["thresholds"]["epoch_reject_rate_threshold"]:
+            threshold_counts["epoch_reject"] += 1
+        if missing_steps:
+            threshold_counts["missing_steps"] += 1
+
+        search_blob = " ".join(
+            [
+                summary["subject"],
+                summary["status"],
+                " ".join(alarm["category"] for alarm in summary["alarms"]),
+                " ".join(alarm["message"] for alarm in summary["alarms"]),
+                missing_steps_str,
+            ]
+        )
+        row_class = ""
+        if summary["status"] == "FAIL":
+            row_class = "row-fail"
+        elif summary["status"] == "WARN":
+            row_class = "row-warn"
+        step_data_attrs = " ".join(
+            f'data-step-{key}="{"1" if summary["steps"].get(key) else "0"}"' for key, _ in STEP_DEFS
+        )
+        subject_rows.append(
+            f"""
+            <tr class="{row_class}" data-search="{html_text(search_blob)}" data-status="{html_text(summary['status'].lower())}" data-subject="{html_text(summary['subject'])}" data-subject-url="subjects/{html_text(summary['subject_slug'])}.html" data-alarm-count="{summary['alarm_count']}" data-bad-channels="{bad_channels}" data-bad-segments="{bad_segments}" data-marked-ica="{summary['ica']['marked_count']}" data-coreg-mean="{'' if coreg_mean is None else coreg_mean}" data-coreg-max="{'' if summary['coregistration']['dist_max'] is None else summary['coregistration']['dist_max']}" data-epoch-reject="{'' if epoch_reject_rate is None else epoch_reject_rate}" data-risk-score="{risk_score}" data-missing-steps="{html_text(missing_steps_str)}" data-missing-count="{len(missing_steps)}" {step_data_attrs}>
+              <td><a href="subjects/{html_text(summary['subject_slug'])}.html">{html_text(summary['subject'])}</a></td>
+              <td>{render_status_pill(summary['status'])}</td>
+              <td>{fmt_int(summary['alarm_count'])}</td>
+              <td>{fmt_int(bad_channels)}</td>
+              <td>{fmt_int(bad_segments)}</td>
+              <td>{fmt_int(summary['ica']['marked_count'])}</td>
+              <td>{fmt_float(coreg_mean, 2)}</td>
+              <td>{fmt_float(summary['coregistration']['dist_max'], 2)}</td>
+              <td>{fmt_float((epoch_reject_rate * 100) if epoch_reject_rate is not None else None, 1, '%')}</td>
+              <td>{render_step_snapshot(summary, compact=True)}</td>
+            </tr>
+            """
+        )
+
+    hot_subjects = sorted_subjects[:12]
+    alarm_rows = []
+    for summary in hot_subjects:
+        if not summary["alarms"]:
+            continue
+        for alarm in summary["alarms"]:
+            css_class = "danger" if alarm["severity"] == "danger" else ""
+            search_blob = f"{summary['subject']} {alarm['category']} {alarm['message']}"
+            alarm_rows.append(
+                f"""
+                <div class="alarm-item alarm-row {css_class}" data-search="{html_text(search_blob)}">
+                  <div class="category"><a href="subjects/{html_text(summary['subject_slug'])}.html">{html_text(summary['subject'])}</a> · {html_text(alarm['category'])}</div>
+                  <div>{html_text(alarm['message'])}</div>
+                </div>
+                """
+            )
+
+    top_subject_cards = []
+    for summary in hot_subjects[:6]:
+        top_subject_cards.append(
+            f"""
+            <div class="top-subject-item">
+              <strong><a href="subjects/{html_text(summary['subject_slug'])}.html">{html_text(summary['subject'])}</a></strong>
+              <div class="chips">
+                {render_status_pill(summary['status'])}
+                <span class="pill neutral">Alarms: {fmt_int(summary['alarm_count'])}</span>
+              </div>
+              <div class="small" style="margin-top:8px">Bad channels {fmt_int(summary['artifacts']['bad_channels_count'])}, bad segments {fmt_int(summary['artifacts']['bad_segments'])}, coreg mean {fmt_float(summary['coregistration']['dist_mean'], 2, ' mm')}</div>
+            </div>
+            """
+        )
+
+    threshold_cards = [
+        ("Bad channels above threshold", threshold_counts["bad_channels"]),
+        ("Bad segments above threshold", threshold_counts["bad_segments"]),
+        ("Coreg mean above threshold", threshold_counts["coreg_mean"]),
+        ("Epoch reject above threshold", threshold_counts["epoch_reject"]),
+        ("Any missing steps", threshold_counts["missing_steps"]),
+    ]
+
+    step_completion_summary = "".join(
+        f'<span class="summary-chip">{html_text(label)} {fmt_int(dataset_summary["step_completion"][key])}/{fmt_int(dataset_summary["total_subjects"])}</span>'
+        for key, label in STEP_DEFS
+    )
+
+    status_bar_items = []
+    total_subjects = max(1, dataset_summary["total_subjects"])
+    for label, count, css in [
+        ("Pass", dataset_summary["pass_count"], "good"),
+        ("Warn", dataset_summary["warn_count"], "warn"),
+        ("Fail", dataset_summary["fail_count"], "danger"),
+    ]:
+        width = (count / total_subjects) * 100 if dataset_summary["total_subjects"] else 0
+        status_bar_items.append(
+            f"""
+            <div>
+              <div class="stat-bar-label">
+                <span>{label}</span>
+                <span>{fmt_int(count)} / {fmt_int(dataset_summary['total_subjects'])}</span>
+              </div>
+              <div class="stat-bar-track">
+                <div class="stat-bar-fill" style="width:{width:.1f}%"></div>
+              </div>
+            </div>
+            """
+        )
+
+    content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MEGPrep Static HTML Report</title>
+  <link rel="stylesheet" href="assets/report.css">
+  <script src="assets/report.js"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <h1>MEGPrep Static HTML Report</h1>
+      <p>Dataset-level portable dashboard for large-scale MEG preprocessing. It keeps summary pages, copied evidence figures, and sidecar files together for offline review and download.</p>
+      <p>Report root: {html_text(dataset_summary['report_root'])}</p>
+      <div class="filter-panel">
+        <div class="filter-grid">
+          <div class="control-group search-control">
+            <label for="subjectSearch">Search</label>
+            <input id="subjectSearch" type="text" placeholder="Search subject, status, or alarm" oninput="resetSubjectPage()">
+          </div>
+          <div class="control-group">
+            <label for="subjectStatusFilter">Status</label>
+            <select id="subjectStatusFilter" onchange="resetSubjectPage()">
+              <option value="all">All status</option>
+              <option value="pass">Pass</option>
+              <option value="warn">Warn</option>
+              <option value="fail">Fail</option>
+            </select>
+          </div>
+          <div class="control-group">
+            <label for="subjectMissingStepFilter">Missing Step</label>
+            <select id="subjectMissingStepFilter" onchange="resetSubjectPage()">
+              <option value="all">All step completeness</option>
+              <option value="artifacts">Missing artifacts</option>
+              <option value="ica">Missing ICA</option>
+              <option value="coregistration">Missing coreg</option>
+              <option value="headmodel">Missing head model</option>
+              <option value="epochs">Missing epochs</option>
+              <option value="covariance">Missing covariance</option>
+              <option value="source">Missing source</option>
+            </select>
+          </div>
+          <div class="control-group">
+            <label for="subjectSortBy">Sort</label>
+            <select id="subjectSortBy" onchange="setSubjectSortFromSelect()">
+              <option value="risk" selected>Sort by risk</option>
+              <option value="missing_steps">Sort by missing steps</option>
+              <option value="alarm_count">Sort by alarms</option>
+              <option value="bad_channels">Sort by bad channels</option>
+              <option value="bad_segments">Sort by bad segments</option>
+              <option value="marked_ica">Sort by marked ICA</option>
+              <option value="coreg_mean">Sort by coreg mean</option>
+              <option value="coreg_max">Sort by coreg max</option>
+              <option value="epoch_reject">Sort by epoch reject</option>
+              <option value="subject">Sort by subject</option>
+            </select>
+          </div>
+          <div class="control-group">
+            <label for="subjectPageSize">Page Size</label>
+            <select id="subjectPageSize" onchange="resetSubjectPage()">
+              <option value="10">10 / page</option>
+              <option value="20" selected>20 / page</option>
+              <option value="50">50 / page</option>
+              <option value="100">100 / page</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="hero-links">
+        <a href="data/dataset_summary.json" target="_blank">Dataset summary JSON</a>
+        <a href="data/subjects.csv" target="_blank">Subjects CSV</a>
+        <a href="alarms.html">Alarm board</a>
+      </div>
+    </div>
+
+    <div class="grid cards">
+      <div class="card">
+        <div class="label">Total Subjects</div>
+        <div class="value">{fmt_int(dataset_summary['total_subjects'])}</div>
+      </div>
+      <div class="card">
+        <div class="label">Passed</div>
+        <div class="value">{fmt_int(dataset_summary['pass_count'])}</div>
+      </div>
+      <div class="card">
+        <div class="label">Warnings</div>
+        <div class="value">{fmt_int(dataset_summary['warn_count'])}</div>
+      </div>
+      <div class="card">
+        <div class="label">Failed</div>
+        <div class="value">{fmt_int(dataset_summary['fail_count'])}</div>
+      </div>
+      <div class="card">
+        <div class="label">Total Alarms</div>
+        <div class="value">{fmt_int(dataset_summary['alarm_count'])}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="dashboard-grid">
+        <div class="panel">
+          <div class="panel-kicker">Dataset Overview</div>
+          <div class="panel-title-row">
+            <div class="panel-title-group">
+              <h3>QC Overview</h3>
+              <div class="panel-subtitle">Aggregate preprocessing quality indicators across the current dataset.</div>
+            </div>
+          </div>
+          <div class="metric-list">
+            <div class="metric-box"><div class="k">Avg Bad Channels</div><div class="v">{fmt_float(dataset_summary['averages']['bad_channels'], 1)}</div></div>
+            <div class="metric-box"><div class="k">Avg Bad Segments</div><div class="v">{fmt_float(dataset_summary['averages']['bad_segments'], 1)}</div></div>
+            <div class="metric-box"><div class="k">Avg Coreg Mean</div><div class="v">{fmt_float(dataset_summary['averages']['coreg_mean_mm'], 2, ' mm')}</div></div>
+            <div class="metric-box"><div class="k">Avg Coreg Max</div><div class="v">{fmt_float(dataset_summary['averages']['coreg_max_mm'], 2, ' mm')}</div></div>
+            <div class="metric-box"><div class="k">Avg Epoch Reject</div><div class="v">{fmt_float((dataset_summary['averages']['epoch_reject_rate'] * 100) if dataset_summary['averages']['epoch_reject_rate'] is not None else None, 1, '%')}</div></div>
+            <div class="metric-box"><div class="k">Total Alarms</div><div class="v">{fmt_int(dataset_summary['alarm_count'])}</div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-kicker">Dataset Overview</div>
+          <div class="panel-title-row">
+            <div class="panel-title-group">
+              <h3>Status Distribution</h3>
+              <div class="panel-subtitle">PASS, WARN, and FAIL counts under the current static QC rules.</div>
+            </div>
+          </div>
+          <div class="stat-bar-list">
+            {''.join(status_bar_items)}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="panel">
+        <div class="panel-kicker">Completion Matrix</div>
+        <div class="panel-title-row">
+          <div class="panel-title-group">
+            <h3>Step Completion Heat Matrix</h3>
+            <div class="panel-subtitle">Current-page subjects on rows, preprocessing steps on columns, with sticky subject labels for large datasets.</div>
+          </div>
+        </div>
+        <div class="step-matrix-shell">
+          <div class="step-matrix-meta">
+            <div class="small" id="stepMatrixInfo">Heat matrix shows the current page slice and updates with homepage filters.</div>
+            <div class="step-matrix-summary" id="stepMatrixSummary">{step_completion_summary}</div>
+          </div>
+          <div id="stepCompletionMatrix">
+            <div class="small">Loading step matrix...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="panel">
+        <div class="panel-kicker">Priority Queue</div>
+        <div class="panel-title-row">
+          <div class="panel-title-group">
+            <h3>Highest Priority Subjects</h3>
+            <div class="panel-subtitle">Subjects with the heaviest alarm burden and highest review priority.</div>
+          </div>
+        </div>
+        <div class="top-subject-list">
+          {''.join(top_subject_cards) or '<div class="small">No subjects available.</div>'}
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="dashboard-grid">
+        <div class="panel">
+          <div class="panel-kicker">Thresholds</div>
+          <div class="panel-title-row">
+            <div class="panel-title-group">
+              <h3>Threshold Watchlist</h3>
+              <div class="panel-subtitle">Counts of subjects breaching the current static QC thresholds.</div>
+            </div>
+          </div>
+          <div class="metric-list">
+            {''.join(f'<div class="metric-box"><div class="k">{html_text(label)}</div><div class="v">{fmt_int(count)}</div></div>' for label, count in threshold_cards)}
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-kicker">Rulebook</div>
+          <div class="panel-title-row">
+            <div class="panel-title-group">
+              <h3>QC Rules</h3>
+              <div class="panel-subtitle">How the static report derives PASS, WARN, FAIL, and completion state.</div>
+            </div>
+          </div>
+          <div class="rule-list">
+            <div class="rule-item"><strong>Passed</strong><div class="small">No alarms under the current static thresholds.</div></div>
+            <div class="rule-item"><strong>Warnings</strong><div class="small">1-2 alarms and no danger-level alarm.</div></div>
+            <div class="rule-item"><strong>Failed</strong><div class="small">3 or more alarms, or at least one danger-level alarm such as a coregistration threshold breach.</div></div>
+            <div class="rule-item"><strong>Step Completion</strong><div class="small">Completion is presence-based. A step counts as complete when its expected report outputs exist, not when it necessarily passes QC.</div></div>
+            <div class="rule-item"><strong>Adjust Thresholds</strong><div class="small">Regenerate the static report with CLI flags such as <code>--bad_channel_threshold</code>, <code>--bad_segment_threshold</code>, <code>--coreg_mean_threshold</code>, <code>--coreg_max_threshold</code>, and <code>--epoch_reject_rate_threshold</code>.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>High-Priority Alarms</h2>
+      <div class="panel">
+        <div class="toolbar" style="margin-top:0">
+          <input id="alarmSearch" type="text" placeholder="Search alarms" oninput="filterAlarmRows('alarmSearch', 'alarmBoard')">
+        </div>
+        <div class="table-count" id="alarmCountInfo" style="margin-bottom:10px">Showing 0 of 0 alarms</div>
+        <div id="alarmBoard" class="alarm-list">
+          {''.join(alarm_rows) or '<div class="small">No alarms found across the dataset.</div>'}
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Subject Summary Table</h2>
+      <div class="panel table-wrap">
+        <div class="subject-table-controls">
+          <div class="table-count" id="subjectCountInfo">Showing 0-0 of 0 matched subjects</div>
+          <div class="pager">
+            <button id="subjectPrevBtn" onclick="setSubjectPage(-1)">Previous</button>
+            <span id="subjectPageInfo" class="table-count">Page 1 / 1</span>
+            <button id="subjectNextBtn" onclick="setSubjectPage(1)">Next</button>
+          </div>
+        </div>
+        <table id="subjectTable">
+          <thead>
+            <tr>
+              <th class="sortable"><button type="button" class="sort-header" data-sort-key="subject" onclick="setSubjectSort('subject')"><span>Subject</span><span class="sort-indicator">↕</span></button></th>
+              <th>Status</th>
+              <th class="sortable"><button type="button" class="sort-header" data-sort-key="alarm_count" onclick="setSubjectSort('alarm_count')"><span>Alarms</span><span class="sort-indicator">↕</span></button></th>
+              <th class="sortable"><button type="button" class="sort-header" data-sort-key="bad_channels" onclick="setSubjectSort('bad_channels')"><span>Bad Channels</span><span class="sort-indicator">↕</span></button></th>
+              <th class="sortable"><button type="button" class="sort-header" data-sort-key="bad_segments" onclick="setSubjectSort('bad_segments')"><span>Bad Segments</span><span class="sort-indicator">↕</span></button></th>
+              <th class="sortable"><button type="button" class="sort-header" data-sort-key="marked_ica" onclick="setSubjectSort('marked_ica')"><span>Marked ICA</span><span class="sort-indicator">↕</span></button></th>
+              <th class="sortable"><button type="button" class="sort-header" data-sort-key="coreg_mean" onclick="setSubjectSort('coreg_mean')"><span>Coreg Mean</span><span class="sort-indicator">↕</span></button></th>
+              <th class="sortable"><button type="button" class="sort-header" data-sort-key="coreg_max" onclick="setSubjectSort('coreg_max')"><span>Coreg Max</span><span class="sort-indicator">↕</span></button></th>
+              <th class="sortable"><button type="button" class="sort-header" data-sort-key="epoch_reject" onclick="setSubjectSort('epoch_reject')"><span>Epoch Reject Rate</span><span class="sort-indicator">↕</span></button></th>
+              <th>Step Snapshot</th>
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(subject_rows) or '<tr><td colspan="10">No subjects found.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer">
+      Generated by MEGPrep static HTML report generator on {html_text(dataset_summary['generated_at'])}.
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+    with open(output_root / "index.html", "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def build_alarms_html(subject_summaries: list[dict[str, Any]], output_root: Path) -> None:
+    rows = []
+    for summary in sorted(subject_summaries, key=lambda item: (-item["alarm_count"], item["subject"])):
+        for alarm in summary["alarms"]:
+            css_class = "danger" if alarm["severity"] == "danger" else ""
+            search_blob = f"{summary['subject']} {alarm['category']} {alarm['severity']} {alarm['message']}"
+            rows.append(
+                f"""
+                <div class="alarm-item alarm-row {css_class}" data-search="{html_text(search_blob)}">
+                  <div class="category"><a href="subjects/{html_text(summary['subject_slug'])}.html">{html_text(summary['subject'])}</a> · {html_text(alarm['category'])}</div>
+                  <div>{html_text(alarm['message'])}</div>
+                </div>
+                """
+            )
+
+    content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MEGPrep Alarm Board</title>
+  <link rel="stylesheet" href="assets/report.css">
+  <script src="assets/report.js"></script>
+</head>
+<body>
+  <div class="container">
+    <a class="back-link" href="index.html">&larr; Back to dataset summary</a>
+    <div class="hero">
+      <h1>Alarm Board</h1>
+      <p>Cross-subject static alarm board for fast triage and prioritization.</p>
+      <div class="toolbar">
+        <input id="alarmSearch" type="text" placeholder="Search subject, category, or message" oninput="filterAlarmRows('alarmSearch', 'alarmList')">
+      </div>
+    </div>
+    <div class="panel">
+      <div id="alarmList" class="alarm-list">
+        {''.join(rows) or '<div class="small">No alarms. All subjects passed the static checks.</div>'}
+      </div>
+    </div>
+    <div class="footer">
+      Generated by MEGPrep static HTML report generator on {html_text(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}.
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+    with open(output_root / "alarms.html", "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def write_assets(output_root: Path) -> None:
+    assets_dir = ensure_dir(output_root / "assets")
+    with open(assets_dir / "report.css", "w", encoding="utf-8") as f:
+        f.write(REPORT_CSS)
+    with open(assets_dir / "report.js", "w", encoding="utf-8") as f:
+        f.write(REPORT_JS)
+
+
+def generate_static_report(args: argparse.Namespace) -> Path:
+    report_root_input = Path(args.report_root).resolve()
+    report_root, preprocessed_dir = resolve_report_dirs(report_root_input)
+    output_root = Path(args.output_dir).resolve() if args.output_dir else report_root / "static_html_report"
+    thresholds = {
+        "bad_channel_threshold": args.bad_channel_threshold,
+        "bad_segment_threshold": args.bad_segment_threshold,
+        "coreg_mean_threshold": args.coreg_mean_threshold,
+        "coreg_max_threshold": args.coreg_max_threshold,
+        "epoch_reject_rate_threshold": args.epoch_reject_rate_threshold,
+    }
+
+    if output_root.exists():
+        shutil.rmtree(output_root)
+    ensure_dir(output_root)
+    write_assets(output_root)
+
+    subjects = find_subjects(preprocessed_dir)
+    if not subjects:
+        raise ValueError(
+            f"No subjects were discovered under preprocessed directory: {preprocessed_dir}. "
+            "Please verify that the MEGPrep outputs have been generated."
+        )
+    subject_summaries = [
+        collect_subject_data(subject, report_root, output_root, thresholds) for subject in subjects
+    ]
+    dataset_summary = build_dataset_summary(report_root, output_root, subject_summaries, thresholds)
+
+    for summary in subject_summaries:
+        build_subject_html(summary, output_root)
+
+    build_index_html(dataset_summary, subject_summaries, output_root)
+    build_alarms_html(subject_summaries, output_root)
+
+    if str_to_bool(args.zip_output):
+        shutil.make_archive(str(output_root), "zip", root_dir=output_root)
+
+    return output_root
+
+
+def main() -> None:
+    args = parse_args()
+    output_root = generate_static_report(args)
+    print(f"Static HTML report generated at: {output_root}")
+    if str_to_bool(args.zip_output):
+        print(f"Zip package generated at: {output_root}.zip")
+
+
+if __name__ == "__main__":
+    main()

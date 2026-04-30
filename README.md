@@ -38,14 +38,79 @@ Offers an easy-to-use configuration system. Researchers can adapt the preprocess
 
 ## 🚀 Installation
 
-MEGPrep is distributed as a Docker container. You must have **Docker** installed on your system.
+MEGPrep is officially distributed as a Docker container. We recommend using the
+containerized installation workflow whenever possible, because it provides the
+most reproducible environment and avoids most local dependency conflicts.
 
-1.  **Install Docker**: Follow the instructions for your operating system on the [Docker official website](https://docs.docker.com/get-docker/).
-2.  **[Pull the Image](https://hub.docker.com/r/cmrlab/megprep)**:
-    ```bash
-    docker pull cmrlab/megprep:<version>
-    ```
-    *(Replace `<version>` with the specific version tag, e.g., `0.0.3` or `latest`)*
+If Docker cannot be installed, the Docker daemon is unavailable, or the container
+image cannot be pulled in your network environment, you can try the local
+development installation workflow instead. The local workflow installs MEGPrep
+from source without relying on a container image. Use this option cautiously,
+because differences in system libraries, package versions, and local software
+environments may lead to behavior that differs from the containerized workflow.
+
+### Recommended: Containerized One-Click Install
+
+The scripts under `scripts/install/` install or reuse a container runtime, pull
+`cmrlab/megprep:<version>`, and verify the image by running the MEGPrep help
+command.
+
+```bash
+# Linux
+bash scripts/install/install_megprep_linux.sh
+bash scripts/install/install_megprep_linux.sh 0.0.3
+
+# macOS
+bash scripts/install/install_megprep_macos.sh
+bash scripts/install/install_megprep_macos.sh 0.0.3
+
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File .\scripts\install\install_megprep_windows.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\install\install_megprep_windows.ps1 -ImageTag 0.0.3
+```
+
+On Linux, the installer can use Docker or Apptainer/Singularity:
+
+```bash
+bash scripts/install/install_megprep_linux.sh 0.0.3 docker
+bash scripts/install/install_megprep_linux.sh 0.0.3 apptainer
+```
+
+For more details, see `scripts/install/README.md`.
+
+### Alternative: Local Development One-Click Install
+
+The scripts under `scripts/install-dev/` provide a source-based local
+installation path for Linux environments where container installation is not
+available or image pulling is blocked. This workflow installs or reuses Conda,
+Nextflow, FreeSurfer, and MEGPrep source dependencies in a local installation
+directory.
+
+```bash
+bash scripts/install-dev/install_megprep_dev_linux.sh
+bash scripts/install-dev/install_megprep_dev_linux.sh --install-dir /data/megprep-dev
+bash scripts/install-dev/install_megprep_dev_linux.sh --no-freesurfer
+```
+
+After installation, load the generated environment:
+
+```bash
+source <install-dir>/env.sh
+```
+
+For more details, see `scripts/install-dev/README.md`.
+
+### Manual Docker Pull
+
+If you prefer to install manually, install Docker following the
+[Docker official documentation](https://docs.docker.com/get-docker/) and pull the
+image directly:
+
+```bash
+docker pull cmrlab/megprep:<version>
+```
+
+*(Replace `<version>` with the specific version tag, e.g., `0.0.3` or `latest`)*
 
 ---
 

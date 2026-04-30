@@ -73,7 +73,7 @@ COPY nextflow/meg_anat_pipeline_for_docker.nf ${RUN_DIR}/nextflow/meg_pipeline.n
 COPY nextflow/nextflow_for_docker.config ${RUN_DIR}/nextflow/nextflow.config
 COPY nextflow/run_for_docker.sh ${RUN_DIR}/nextflow/run.sh
 COPY megprep ${RUN_DIR}/megprep/
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+#COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY softwares/mkheadsurf /opt/freesurfer/bin/mkheadsurf
 COPY softwares/tksurfer /opt/freesurfer/bin/tksurfer
 COPY softwares/tktools /opt/freesurfer/lib/tktools
