@@ -16,6 +16,7 @@ import matplotlib
 import numpy as np
 import logging
 import argparse
+import pyvista as pv
 from pathlib import Path
 from typing import Literal
 from matplotlib import pyplot as plt
@@ -79,35 +80,6 @@ def set_random_seed(seed=None):
     np.random.seed(seed)
     return seed
 
-
-
-# def start_xvfb():
-#     """Xvfb restart."""
-#     try:
-#         print("Try to restart Xvfb service...")
-#         os.system('ps aux|grep super')
-#         os.system('ps aux|grep Xvfb')
-#         print("supervisord restarted...")
-#
-#         os.system('/usr/bin/supervisord  -c /etc/supervisor/conf.d/supervisord.conf')
-#         os.system('ps aux|grep super')
-#         os.system('ps aux|grep Xvfb')
-#         # os.system('Xvfb :99 -screen 0 1920x1080x24 &')
-#         os.environ["MESA_GLSL_VERSION_OVERRIDE"] = "150"
-#         os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.2"
-#         os.environ['DISPLAY'] = ':99'
-#         os.environ["QT_QPA_PLATFORM"] = "xcb"
-#
-#         time.sleep(3)
-#         print("Double Check.....")
-#         os.system('ps aux|grep super')
-#         os.system('ps aux|grep Xvfb')
-#         return True
-#     except Exception as e:
-#         print(f"Notice: Restart Xvfb failed!{e}")
-#         return False
-
-
 def get_xvfb_processes():
     """Retrieve a list of all running Xvfb processes along with their owners."""
     xvfb_processes = []
@@ -170,12 +142,17 @@ def is_xvfb_running():
 
 def find_free_display():
     """Find a free display number by checking port numbers."""
+    rng = random.SystemRandom()
     while True:
-        # Generate a random display number between 1000 and 65535
-        display_number = random.randint(1000, 65535)
-        # Check if the port is free
+        # Use OS entropy here; the global random seed is fixed for reproducible
+        # analysis and would otherwise keep selecting the same display.
+        display_number = rng.randint(1000, 59000)
+        lock_file = Path(f"/tmp/.X{display_number}-lock")
+        if lock_file.exists():
+            continue
+        # X11 display :N listens on TCP port 6000 + N when TCP is enabled.
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            if sock.connect_ex(('localhost', display_number)) != 0:
+            if sock.connect_ex(('localhost', 6000 + display_number)) != 0:
                 return display_number
 
 
@@ -187,21 +164,40 @@ def start_xvfb():
     print(f"Starting Xvfb on {display_str}...")
 
     # Start Xvfb
-    # os.system(f'Xvfb {display_str} -screen 0 1920x1080x24 &')
-    os.system(f'Xvfb {display_str} -screen 0 1024x768x24 &') # low
-    # os.system('/usr/bin/supervisord  -c /etc/supervisor/conf.d/supervisord.conf')
+    # subprocess.Popen(['Xvfb', display_str, '-screen', '0', '1920x1080x24'])
+    proc = subprocess.Popen(
+        ['Xvfb', display_str, '-screen', '0', '1024x768x24'],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     os.environ["MESA_GLSL_VERSION_OVERRIDE"] = "150"
     os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.2"
+    os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
     os.environ["QT_QPA_PLATFORM"] = "xcb"
 
     # Set the DISPLAY environment variable
     os.environ['DISPLAY'] = display_str
     print(f"DISPLAY environment variable set to {os.environ['DISPLAY']}")
 
+    for _ in range(20):
+        if proc.poll() is not None:
+            raise RuntimeError(f"Xvfb failed to start on {display_str}")
+        if Path(f"/tmp/.X{free_display}-lock").exists():
+            break
+        time.sleep(0.1)
+
+    # REQUIRED: Pre-initialize the VTK off-screen rendering context to avoid segmentation fault in headless pyvistaqt.
+    pv.OFF_SCREEN = True
+    _dummy_pl = pv.Plotter(off_screen=True)
+    _dummy_pl.add_mesh(pv.Sphere()) 
+    _dummy_pl.show(auto_close=False) 
+    _dummy_pl.close()
+
     return free_display
 
 
-def stop_xvfb(display_number):
+def stop_xvfb(display_number, delay=3):
     """Stop the Xvfb process associated with the specified display number."""
     try:
         display_str = f":{display_number}"
@@ -209,8 +205,14 @@ def stop_xvfb(display_number):
         pid = subprocess.check_output(["pgrep", "-f", f"Xvfb {display_str}"]).strip()
         pid_str = pid.decode("utf-8")
         if pid:
-            # Kill the Xvfb process
-            os.system(f'kill {pid_str}')
+            # Let Qt/PyVista clients disconnect before the X server is stopped;
+            # killing it immediately causes noisy XIO messages during shutdown.
+            subprocess.Popen(
+                ["bash", "-lc", f"sleep {delay}; kill {pid_str} >/dev/null 2>&1 || true"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
             # print(f"Xvfb on {display_str} stopped.")
         else:
             print(f"No Xvfb process found for {display_str}.")

@@ -6,17 +6,20 @@ Step1: Perform automated coregistration using existing algorithms.
 Step2: Enhance algorithms for higher precision, formatted reports, and streamlined workflows.
 """
 import os
+import yaml
 import argparse
 import numpy as np
 import pandas as pd
 import mne
-import yaml
 from mne.coreg import Coregistration
 from pathlib import Path
 from utils import start_xvfb, stop_xvfb, set_random_seed, str2bool
 import logging
 import time
 import gc
+
+
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -229,6 +232,12 @@ def perform_coregistration(raw_file_path, subjects_dir, fiducials="estimated", f
         logger.info(f"Transformation matrix saved to {save_trans_path}")
 
         if display_number is not None:
+            try:
+                mne.viz.close_all_3d_figures()
+            except Exception:
+                pass
+            gc.collect()
+            time.sleep(0.5)
             stop_xvfb(display_number)
 
 
