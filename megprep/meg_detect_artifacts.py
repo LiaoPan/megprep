@@ -139,6 +139,7 @@ def find_bad_segments(raw, config):
         except Exception as e:
             logger.error(e)
     return raw
+    
 def main(args):
     logger.info("args.input:", args.input)
 
@@ -172,11 +173,20 @@ def main(args):
         raw.annotations.save(output_bad_segments_file, overwrite=True)
         logger.info(f"raw.annotations[bad segments]:{raw.annotations}")
 
+        interpolated_bads = False
+        if config.get('interpolate_bads', False) and raw.info['bads']:
+            logger.info(f"Interpolating bad channels: {raw.info['bads']}")
+            raw.interpolate_bads(reset_bads=True)
+            interpolated_bads = True
+            logger.info("Bad channels were interpolated and reset in raw.info['bads'].")
+
+        bad_channels = list(raw.info['bads'])
         with open(output_bad_channels_file, 'w') as f:
             for bad_channel in bad_channels:
                 f.write(f"{bad_channel}\n")
+
         try:
-            if args.annot and (raw.info['bads'] or raw.annotations):
+            if (args.annot and (raw.info['bads'] or raw.annotations)) or interpolated_bads:
                 logger.info(f"Adding artifact information into {args.input}")
                 raw.save(f"{args.input}", overwrite=True)
         except Exception as e:

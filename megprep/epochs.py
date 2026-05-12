@@ -155,6 +155,18 @@ def epochs(subj_data_file,output_epoch_file, output_dir, events_file, config):
     else:
         raise ValueError("Unknown task_type specified in the config. Use 'resting' or 'task'.")
 
+    if config.get('interpolate_bads', False):
+        print("Interpolating bad channels in epochs.")
+        epochs_data.interpolate_bads(reset_bads=True)
+
+    if config.get('drop_bad_channels', False):
+        bad_channels = list(epochs_data.info['bads'])
+        if bad_channels:
+            print("Dropping bad channels in epochs: {}".format(bad_channels))
+            epochs_data.drop_channels(bad_channels)
+        else:
+            print("No bad channels found in epochs to drop.")
+
     # autoreject[epochs]
     # if config.get('autoreject'):
         # ar = AutoReject()

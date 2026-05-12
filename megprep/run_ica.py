@@ -5,14 +5,17 @@ import os
 import math
 import numpy as np
 import mne
+import joblib as jl
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+
+from pathlib import Path
 from scipy.stats import kurtosis
 from scipy.io import loadmat
-import matplotlib.pyplot as plt
-from mne.preprocessing import ICA, read_ica
-from pathlib import Path
-import joblib as jl
 from PIL import Image, ImageDraw, ImageFont
-import matplotlib as mpl
+from mne.preprocessing import ICA, read_ica
+from utils import load_bad_chn_seg
+
 mne.viz.set_browser_backend('matplotlib')
 mpl.rcParams['figure.max_open_warning'] = 100
 
@@ -54,12 +57,17 @@ def add_text(fig_path,exp_var):
     image1.close()
 
 
-def run_ica(subj_tag, subj_res_path, subj_res_path_ica, fn_data, fn_ica, n_IC, modality,random_seed):
+
+
+
+def run_ica(subj_tag, subj_res_path, subj_res_path_ica, fn_data, fn_ica, n_IC, modality, fname_bad_channels, fname_bad_segments, random_seed):
     figs = []
     subj_res_path_ica = Path(subj_res_path_ica)  
-    subj_res_path_ica.mkdir(parents=True, exist_ok=True)  
+    subj_res_path_ica.mkdir(parents=True, exist_ok=True)
 
     raw = mne.io.read_raw_fif(fn_data,preload=True,verbose=False)
+    raw = load_bad_chn_seg(raw, fname_bad_channels, fname_bad_segments)
+
     raw_ = raw.copy()
 
     if not os.path.exists(os.path.join(subj_res_path, fn_ica)):
@@ -71,7 +79,6 @@ def run_ica(subj_tag, subj_res_path, subj_res_path_ica, fn_data, fn_ica, n_IC, m
         if modality == 'eeg':
             picks = mne.pick_types(raw_.info, meg=False, eeg=True, eog=False,
                                    stim=False, exclude='bads')
-            # reject = dict(eeg=200e-6)
         elif modality == 'meg':
             picks = mne.pick_types(raw_.info, meg=True, eeg=False, eog=False,
                                    stim=False, exclude='bads', ref_meg=False)
@@ -81,16 +88,11 @@ def run_ica(subj_tag, subj_res_path, subj_res_path_ica, fn_data, fn_ica, n_IC, m
         else:
             picks = None
 
-        ica.fit(raw_, picks=picks, reject_by_annotation=True)  # , reject=reject)
+        ica.fit(raw_, picks=picks, reject_by_annotation=True)
         ica.save(os.path.join(subj_res_path, fn_ica))
     else:
         ica = read_ica(os.path.join(subj_res_path, fn_ica))
     
-    try:
-        labels = mne.read_annotations(fn_data)
-        raw_.set_annotations(labels)
-    except Exception as e:
-        print(e)
     try:
         fig_list = ica.plot_properties(raw_, picks=list(range(ica.n_components_)), reject_by_annotation=True, reject=None,
                                         show=False, verbose=False)
@@ -204,12 +206,11 @@ def run_ica(subj_tag, subj_res_path, subj_res_path_ica, fn_data, fn_ica, n_IC, m
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Generate ICA components and plots for MEG data.")
-    # parser.add_argument('--subject_id', required=True, help='Subject ID')
-    # parser.add_argument('--session_id', required=True, help='Session ID')
-
     parser.add_argument('--raw_file', required=True, help='Path to the raw MEG file')
     parser.add_argument('--num_IC', required=True, type=float, help='The number of ICA components to generate')
     parser.add_argument('--output_dir', required=True, help='Path to save ICA plots and related files')
+    parser.add_argument('--fname_bad_channels', required=True, help='Path to the bad channels file')
+    parser.add_argument('--fname_bad_segments', required=True, help='Path to the bad segments file')
     parser.add_argument('--seed', required=False, default=2025, help='Random seed for ICA')
 
     return parser.parse_args()
@@ -222,7 +223,6 @@ def main():
     subj_res_path_ica = os.path.join(subj_res_path, "ica_results")
     os.makedirs(subj_res_path_ica, exist_ok=True)
 
-    # subj_path = f"{Path(args.raw_file).parent}"
     subj_ica_file = f"{subj_tag}_ica.fif"
     if not os.path.exists(subj_res_path):
         os.mkdir(subj_res_path)
@@ -245,6 +245,8 @@ def main():
         fn_ica=subj_ica_file,
         n_IC=num_IC,
         modality="meg",
+        fname_bad_channels=args.fname_bad_channels,
+        fname_bad_segments=args.fname_bad_segments,
         random_seed=random_seed,
     )
 

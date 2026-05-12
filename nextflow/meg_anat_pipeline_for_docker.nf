@@ -295,8 +295,6 @@ process detect_Artifacts {
 //     val "${preproc_dir}/${raw_subject_basename}/${raw_subject_basename}_preproc-raw${params.file_suffix}",emit: preproc_subject_paths
     val "${raw_subject_path}",emit: preproc_subject_paths
 
-//     publishDir "${preproc_dir}/artifact_report/${raw_subject_parent}", mode: 'copy'
-
     script:
     script_name = "${params.code_dir}/meg_detect_artifacts.py"
     raw_subject_basename = file(raw_subject_path).getBaseName()
@@ -343,6 +341,8 @@ process run_ICA {
         --raw_file $raw_subject_path \\
         --output_dir ${preproc_dir}/${params.ICA_output_dir} \\
         --num_IC ${params.num_IC} \\
+        --fname_bad_channels ${bad_channels} \\
+        --fname_bad_segments ${bad_segments} \\
         --seed ${params.ICA_random_seed}
     """
 }
@@ -376,23 +376,22 @@ process run_IC_label {
 }
 
 process apply_ICA {
-//     debug true
     tag "${raw_subject_basename}"
 
     input:
     path preproc_dir
     val raw_subject_path
     path marked_components
+    path bad_channels
+    path bad_segments
 
     output:
-//     val "${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif",emit: preproc_subject_paths
     path "${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif",emit: preproc_subject_paths
     tuple val("${target_mri_subject_id}"),val("${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif"), emit: target_mri_subject_id
 
     script:
     script_name = "${params.code_dir}/apply_ica.py"
     raw_subject_basename = file(raw_subject_path).getBaseName()
-//     raw_subject_basename_origin = file(raw_subject_path).getParent().getBaseName()
     raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
     target_mri_subject_id = raw_subject_basename.split('_')[0] + params.anatomy_select_tag
     """
@@ -402,6 +401,8 @@ process apply_ICA {
         --exclude_file ${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/marked_components.txt \\
         --output_file ${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif \\
         --output_dir ${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename} \\
+        --fname_bad_channels ${bad_channels} \\
+        --fname_bad_segments ${bad_segments}
     """
 }
 
@@ -863,11 +864,11 @@ workflow {
        // Apply ICA cleanup.
        preproc_subject_paths_clean = apply_ICA(params.preproc_dir,
                                             preproc_subject_paths_ica_label.preproc_subject_paths,
-                                            preproc_subject_paths_ica_label.marked_components)
+                                            preproc_subject_paths_ica_label.marked_components,
+                                            preproc_subject_paths_dta.bad_channels,
+                                            preproc_subject_paths_dta.bad_segments)
 
         // Create analysis epochs.
-    //     epoch_subject_paths = epochs(params.preproc_dir,preproc_subject_paths_clean.preproc_subject_paths)
-
         events_files = raw_files_path.collect { raw_subject_path ->
             return raw_subject_path.replaceAll(/_meg\..*/, '_events.tsv')
         }
@@ -886,8 +887,6 @@ workflow {
         }
 
         epoch_subject_paths = epochs(params.dataset_dir, params.preproc_dir,preproc_subject_raw,events_files)
-//         epoch_subject_paths = epochs(params.dataset_dir, params.preproc_dir,preproc_subject_paths_clean.preproc_subject_paths,events_files)
-
 
         // Covariance
         if (params.covar_type == 'epochs'){

@@ -259,16 +259,42 @@ def pad_raw_data(raw, dura):
 
     return raw_padded
 
-
 def load_bad_chn_seg(raw, fname_bad_chn, fname_bad_seg):
-    bad_chn_info = open(fname_bad_chn).read().splitlines()
+    """
+    Load and apply bad MEG channel and segment information to a raw object.
+
+    This function reads a list of bad channels and annotations of bad segments from
+    files and applies them to a given raw MEG object. Only channels present in the
+    raw data are retained.
+
+    Parameters
+    ----------
+    raw : mne.io.Raw
+        The raw MEG data object to update with bad channel and segment information.
+    fname_bad_chn : str or Path
+        File path containing the list of bad channels (one per line).
+    fname_bad_seg : str or Path
+        File path containing the annotations of bad segments in FIF format.
+
+    Returns
+    -------
+    mne.io.Raw
+        The raw object with updated `info['bads']` and annotations.
+
+    Notes
+    -----
+    - Channels listed in `fname_bad_chn` that do not exist in `raw.ch_names` are ignored.
+    - Existing annotations in `raw` are replaced with those loaded from `fname_bad_seg`.
+
+    """
+
+    bad_chn_info = Path(fname_bad_chn).open(encoding="utf-8").read().splitlines()
     bad_seg_info = mne.read_annotations(fname_bad_seg)
 
     raw.info["bads"] = [i for i in bad_chn_info if i in raw.ch_names]
     raw.set_annotations(bad_seg_info)
 
     return raw
-
 
 def plot_snippets(
     fname_fif: str | Path,

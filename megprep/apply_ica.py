@@ -5,6 +5,7 @@ import mne
 import argparse
 from mne.preprocessing import read_ica
 import matplotlib.pyplot as plt
+from utils import load_bad_chn_seg
 
 def load_exclude_components(exclude_file):
     """
@@ -20,9 +21,10 @@ def load_exclude_components(exclude_file):
                 print(f"Skipping invalid line in exclude file: {line.strip()}")
     return exclude
 
-def apply_ica(raw_file, ica_file, exclude_file, output_file, output_dir):
+def apply_ica(raw_file, ica_file, exclude_file, output_file, output_dir, fname_bad_channels, fname_bad_segments):
     # Load raw data
     raw = mne.io.read_raw_fif(raw_file, preload=True)
+    raw = load_bad_chn_seg(raw, fname_bad_channels, fname_bad_segments)
 
     # Load ICA data
     ica = read_ica(ica_file)
@@ -75,10 +77,20 @@ def parse_arguments():
     parser.add_argument('--exclude_file', required=True, help='Path to the text file specifying components to exclude')
     parser.add_argument('--output_file', required=True, help='Path to save the cleaned MEG file')
     parser.add_argument('--output_dir', required=True, help='Path to save quality assurance plots')
+    parser.add_argument('--fname_bad_channels', required=True, help='Path to the bad channels file')
+    parser.add_argument('--fname_bad_segments', required=True, help='Path to the bad segments file')
     return parser.parse_args()
 def main():
     args = parse_arguments()
-    apply_ica(args.raw_file, args.ica_file, args.exclude_file, args.output_file, args.output_dir)
+    apply_ica(
+        args.raw_file,
+        args.ica_file,
+        args.exclude_file,
+        args.output_file,
+        args.output_dir,
+        args.fname_bad_channels,
+        args.fname_bad_segments,
+    )
 
 if __name__ == "__main__":
     main()

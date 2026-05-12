@@ -2,26 +2,76 @@
 # -*- coding: utf-8 -*-
 import os
 import time
+import subprocess
 import numpy as np
 import pandas as pd
 import streamlit as st
-from stpyvista import stpyvista
-from stpyvista.utils import start_xvfb
-import pyvista as pv
 import mne
 from pathlib import Path
 from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
 
 # --- 1. 设置环境变量 ---
+os.environ["PYVISTA_PLOT_THEME"] = "document"
+os.environ["PYVISTA_USE_PANEL"] = "False"
 os.environ["MESA_GLSL_VERSION_OVERRIDE"] = "150"
 os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.2"
-os.environ["DISPLAY"] = ":99"
+os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+os.environ["VTK_OFFSCREEN_RENDERING"] = "1"
 
-# --- 2. 启动虚拟显示 ---
-if "IS_XVFB_RUNNING" not in st.session_state:
-    start_xvfb()
-    st.session_state.IS_XVFB_RUNNING = True
+from stpyvista import stpyvista
+import pyvista as pv
+
+
+def _find_free_xvfb_display(start=100, stop=2000):
+    for display_number in range(start, stop):
+        lock_path = Path(f"/tmp/.X{display_number}-lock")
+        socket_path = Path(f"/tmp/.X11-unix/X{display_number}")
+        if not lock_path.exists() and not socket_path.exists():
+            return display_number
+    raise RuntimeError("No free Xvfb display was found.")
+
+
+def ensure_vtk_headless_context():
+    """Start a private Xvfb display and pre-initialize VTK off-screen rendering."""
+    if st.session_state.get("SOURCE_3D_VTK_CONTEXT_READY"):
+        return
+
+    display_number = _find_free_xvfb_display()
+    display = f":{display_number}"
+    proc = subprocess.Popen(
+        ["Xvfb", display, "-screen", "0", "1024x768x24"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    os.environ["DISPLAY"] = display
+
+    socket_path = Path(f"/tmp/.X11-unix/X{display_number}")
+    lock_path = Path(f"/tmp/.X{display_number}-lock")
+    for _ in range(30):
+        if proc.poll() is not None:
+            raise RuntimeError(f"Xvfb failed to start on {display}.")
+        if socket_path.exists() or lock_path.exists():
+            break
+        time.sleep(0.1)
+    else:
+        proc.terminate()
+        raise RuntimeError(f"Timed out waiting for Xvfb on {display}.")
+
+    pv.OFF_SCREEN = True
+    dummy_plotter = pv.Plotter(off_screen=True)
+    dummy_plotter.add_mesh(pv.Sphere())
+    dummy_plotter.show(auto_close=False)
+    dummy_plotter.close()
+
+    st.session_state.SOURCE_3D_XVFB_PROCESS = proc
+    st.session_state.SOURCE_3D_VTK_CONTEXT_READY = True
+
+
+# --- 2. 启动虚拟显示并预初始化 VTK ---
+ensure_vtk_headless_context()
 
 
 # --- 3. 阈值处理函数 ---
@@ -510,7 +560,7 @@ st.markdown("---")
 st.subheader(f"🧠 Brain Surface Visualization - {hemisphere_view}")
 
 with st.spinner("Rendering brain surface..."):
-    plotter = pv.Plotter(window_size=[1400, 700])
+    plotter = pv.Plotter(window_size=[1400, 700], off_screen=True)
 
     n_vertices_shown = 0
     n_vertices_hidden = 0

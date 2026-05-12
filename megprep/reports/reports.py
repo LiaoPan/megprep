@@ -21,7 +21,6 @@ coreg_page = st.Page("reports/coreg.py", title="Coregistration", icon=":material
 coreg_page_3d = st.Page("reports/coregistration.py", title="Coregistration [3D]", icon=":material/dashboard:")
 
 source_page = st.Page("reports/source_imaging.py", title="Source Localization", icon=":material/dashboard:")
-source_vis_page = st.Page("reports/source_imaging_3d.py", title="Source Localization [3D]", icon=":material/dashboard:")
 
 nextflow_page = st.Page("reports/nextflow.py", title="NextFlow Resources", icon=":material/dashboard:")
 nextflow_config_page = st.Page("reports/nx_config_online.py", title="NextFlow Configure", icon=":material/dashboard:")
@@ -41,11 +40,10 @@ pg = st.navigation([demo_page,preproc_page,
                     epochs_page,
                     covar_page,
                     headmodel_page,
-                    coreg_page, #coreg_page_3d,
-                    source_page, #source_vis_page,
+                    coreg_page, coreg_page_3d,
+                    source_page,
                     quality_check_page,
                     nextflow_config_page, nextflow_page,
                     ])
-# pg = st.navigation([preproc_page, ica_page, coreg_page,nextflow_page])
 
 pg.run()
