@@ -44,6 +44,32 @@ STEP_DEFS = [
     ("source", "Source"),
 ]
 
+COREG_ASSET_STEPS = (
+    "coreg_initial",
+    "coreg_fiducials",
+    "coreg_icp",
+    "coreg_icp_finetune",
+)
+COREG_ASSET_VIEW_SUFFIXES = ("", "_brain")
+COREG_STAGE_DETAILS = {
+    "coreg_initial": {
+        "title": "Initial alignment",
+        "description": "Before fitting, showing the starting MEG-MRI alignment.",
+    },
+    "coreg_fiducials": {
+        "title": "After fiducial fitting",
+        "description": "Alignment after fitting nasion, LPA, and RPA fiducials.",
+    },
+    "coreg_icp": {
+        "title": "After ICP registration",
+        "description": "Alignment after the first ICP pass using head shape points.",
+    },
+    "coreg_icp_finetune": {
+        "title": "Final result: fine-tuned ICP",
+        "description": "Final coregistration result used for downstream analysis.",
+    },
+}
+
 REPORT_CSS = """
 :root {
   --bg: #f5f7fb;
@@ -572,6 +598,58 @@ tr.row-fail:hover td.active-sort-cell {
   gap: 16px;
 }
 
+.coreg-gallery {
+  display: grid;
+  gap: 18px;
+}
+
+.coreg-stage {
+  background: linear-gradient(180deg, #fbfdff, #f7faff);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.coreg-stage.final {
+  border-color: rgba(6, 118, 71, 0.32);
+  box-shadow: 0 14px 32px rgba(6, 118, 71, 0.10);
+  background: linear-gradient(180deg, #f1fff7, #fbfdff 42%);
+}
+
+.coreg-stage-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.coreg-stage-title {
+  font-weight: 800;
+  font-size: 1.02rem;
+}
+
+.coreg-stage-desc {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.coreg-stage-images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.coreg-stage .figure {
+  background: #fff;
+}
+
+.coreg-stage .figure .caption {
+  font-weight: 600;
+}
+
 .figure {
   background: #fbfdff;
   border: 1px solid var(--line);
@@ -626,6 +704,12 @@ tr.row-fail:hover td.active-sort-cell {
   color: var(--muted);
   background: rgba(246, 248, 251, 0.94);
   border-color: rgba(152, 162, 179, 0.18);
+}
+
+.figure-badge.good {
+  color: var(--good);
+  background: rgba(221, 249, 235, 0.94);
+  border-color: rgba(6, 118, 71, 0.18);
 }
 
 .alarm-list {
@@ -1094,6 +1178,14 @@ tr.row-fail:hover td.active-sort-cell {
 
   .control-group.search-control {
     grid-column: span 1;
+  }
+
+  .coreg-stage-header {
+    flex-direction: column;
+  }
+
+  .coreg-stage-images {
+    grid-template-columns: 1fr;
   }
 
   .filter-panel {
@@ -1587,7 +1679,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--zip_output",
         type=str,
-        default="true",
+        default="false",
         help="Whether to create a zip archive next to the output directory. true/false.",
     )
     return parser.parse_args()
@@ -1674,6 +1766,16 @@ def ensure_list(value: Any) -> list[Any]:
     if isinstance(value, tuple):
         return list(value)
     return [value]
+
+
+def coreg_asset_sort_key(file_path: Path) -> tuple[int, int, str]:
+    stem = file_path.stem
+    for step_idx, step in enumerate(COREG_ASSET_STEPS):
+        for view_idx, view_suffix in enumerate(COREG_ASSET_VIEW_SUFFIXES):
+            token = f"{step}{view_suffix}"
+            if stem == token or stem.endswith(f"_{token}"):
+                return (step_idx, view_idx, stem)
+    return (len(COREG_ASSET_STEPS), len(COREG_ASSET_VIEW_SUFFIXES), stem)
 
 
 def copy_asset(src: Path, output_root: Path, subject_slug: str, category: str) -> str:
@@ -2106,7 +2208,7 @@ def collect_subject_data(
         except Exception as exc:
             coreg_data["error"] = str(exc)
 
-    for file_path in sorted(trans_dir.glob("*.png")):
+    for file_path in sorted(trans_dir.glob("*.png"), key=coreg_asset_sort_key):
         rel = copy_asset(file_path, output_root, subject_slug, "coreg")
         coreg_data["assets"].append({"title": file_path.stem, "rel_path": rel})
     coreg_data["exists"] = trans_dir.exists() and (dists_file.exists() or bool(coreg_data["assets"]))
@@ -2422,6 +2524,88 @@ def render_gallery(assets: list[dict[str, Any]], prefix: str = "") -> str:
     return '<div class="gallery">' + "".join(blocks) + "</div>"
 
 
+def coreg_asset_stage_and_view(asset: dict[str, Any]) -> tuple[str | None, str | None]:
+    title = str(asset.get("title", ""))
+    for step in COREG_ASSET_STEPS:
+        for view_suffix in COREG_ASSET_VIEW_SUFFIXES:
+            token = f"{step}{view_suffix}"
+            if title == token or title.endswith(f"_{token}"):
+                return step, view_suffix
+    return None, None
+
+
+def render_coreg_gallery(assets: list[dict[str, Any]], prefix: str = "") -> str:
+    if not assets:
+        return '<div class="small">No coregistration images packaged for this section.</div>'
+
+    grouped: dict[str, list[tuple[int, dict[str, Any]]]] = {step: [] for step in COREG_ASSET_STEPS}
+    extras: list[dict[str, Any]] = []
+    for asset in assets:
+        step, view_suffix = coreg_asset_stage_and_view(asset)
+        if step is None or view_suffix is None:
+            extras.append(asset)
+            continue
+        grouped[step].append((COREG_ASSET_VIEW_SUFFIXES.index(view_suffix), asset))
+
+    stage_blocks = []
+    view_labels = {
+        "": "Head surface view",
+        "_brain": "Brain surface view",
+    }
+    for step in COREG_ASSET_STEPS:
+        stage_assets = sorted(grouped[step], key=lambda item: (item[0], str(item[1].get("title", ""))))
+        if not stage_assets:
+            continue
+        details = COREG_STAGE_DETAILS[step]
+        is_final = step == "coreg_icp_finetune"
+        final_badge = '<span class="pill good">Final result</span>' if is_final else ""
+        figure_blocks = []
+        for view_idx, asset in stage_assets:
+            title = html_text(asset.get("title", "Figure"))
+            rel = html_text(prefix + asset["rel_path"])
+            view_suffix = COREG_ASSET_VIEW_SUFFIXES[view_idx]
+            view_label = html_text(view_labels.get(view_suffix, "Coregistration view"))
+            figure_blocks.append(
+                f"""
+                <div class="figure">
+                  <a href="{rel}" target="_blank"><img src="{rel}" alt="{title}"></a>
+                  <div class="caption">{view_label}<div class="small">{title}</div></div>
+                </div>
+                """
+            )
+        stage_blocks.append(
+            f"""
+            <div class="coreg-stage {'final' if is_final else ''}">
+              <div class="coreg-stage-header">
+                <div>
+                  <div class="coreg-stage-title">{html_text(details['title'])}</div>
+                  <div class="coreg-stage-desc">{html_text(details['description'])}</div>
+                </div>
+                {final_badge}
+              </div>
+              <div class="coreg-stage-images">{''.join(figure_blocks)}</div>
+            </div>
+            """
+        )
+
+    if extras:
+        stage_blocks.append(
+            f"""
+            <div class="coreg-stage">
+              <div class="coreg-stage-header">
+                <div>
+                  <div class="coreg-stage-title">Additional coregistration figures</div>
+                  <div class="coreg-stage-desc">Extra images that do not match the standard coregistration stage names.</div>
+                </div>
+              </div>
+              {render_gallery(extras, prefix=prefix)}
+            </div>
+            """
+        )
+
+    return '<div class="coreg-gallery">' + "".join(stage_blocks) + "</div>"
+
+
 def render_alarm_items(alarms: list[dict[str, str]]) -> str:
     if not alarms:
         return '<div class="small">No alarms. This subject passed the current static thresholds.</div>'
@@ -2695,40 +2879,45 @@ def build_subject_html(summary: dict[str, Any], output_root: Path) -> None:
           <div class="metric-box"><div class="k">Min Distance</div><div class="v">{fmt_float(summary['coregistration']['dist_min'], 2, ' mm')}</div></div>
         </div>
         <div class="section">
-          {render_gallery(summary['coregistration']['assets'], prefix="../")}
+          <div class="info-note" style="margin-top:0; margin-bottom:12px">Coregistration figures are grouped by processing stage. The final downstream transform corresponds to the fine-tuned ICP pair: <code>*_coreg_icp_finetune.png</code> and <code>*_coreg_icp_finetune_brain.png</code>.</div>
+          {render_coreg_gallery(summary['coregistration']['assets'], prefix="../")}
         </div>
       </div>
     </div>
 
     <div class="section">
-      <h2>Epochs and Covariance</h2>
-      <div class="two-col">
-        <div class="panel">
-          <div class="metric-list">
-            <div class="metric-box"><div class="k">Rejected Epochs</div><div class="v">{fmt_int(len(summary['epochs'].get('rejected_epochs', [])))}</div></div>
-            <div class="metric-box"><div class="k">Remaining Epochs</div><div class="v">{fmt_int(summary['epochs'].get('remaining_epochs'))}</div></div>
-            <div class="metric-box"><div class="k">Estimated Total</div><div class="v">{fmt_int(summary['epochs'].get('total_epochs_est'))}</div></div>
-            <div class="metric-box"><div class="k">Reject Rate</div><div class="v">{fmt_float((summary['epochs'].get('reject_rate') * 100) if summary['epochs'].get('reject_rate') is not None else None, 1, '%')}</div></div>
-          </div>
-          <div class="section">
-            {render_gallery(summary['epochs']['assets'], prefix="../")}
-          </div>
+      <h2>Epochs</h2>
+      <div class="panel">
+        <div class="metric-list">
+          <div class="metric-box"><div class="k">Rejected Epochs</div><div class="v">{fmt_int(len(summary['epochs'].get('rejected_epochs', [])))}</div></div>
+          <div class="metric-box"><div class="k">Remaining Epochs</div><div class="v">{fmt_int(summary['epochs'].get('remaining_epochs'))}</div></div>
+          <div class="metric-box"><div class="k">Estimated Total</div><div class="v">{fmt_int(summary['epochs'].get('total_epochs_est'))}</div></div>
+          <div class="metric-box"><div class="k">Reject Rate</div><div class="v">{fmt_float((summary['epochs'].get('reject_rate') * 100) if summary['epochs'].get('reject_rate') is not None else None, 1, '%')}</div></div>
         </div>
-        <div class="panel">
-          {render_gallery(summary['covariance']['assets'], prefix="../")}
+        <div class="section">
+          {render_gallery(summary['epochs']['assets'], prefix="../")}
         </div>
       </div>
     </div>
 
     <div class="section">
-      <h2>Head Model and Source Localization</h2>
-      <div class="two-col">
-        <div class="panel">
-          {render_gallery(summary['headmodel']['assets'], prefix="../")}
-        </div>
-        <div class="panel">
-          {render_gallery(summary['source']['assets'], prefix="../")}
-        </div>
+      <h2>Covariance</h2>
+      <div class="panel">
+        {render_gallery(summary['covariance']['assets'], prefix="../")}
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Head Model</h2>
+      <div class="panel">
+        {render_gallery(summary['headmodel']['assets'], prefix="../")}
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Source Localization</h2>
+      <div class="panel">
+        {render_gallery(summary['source']['assets'], prefix="../")}
       </div>
     </div>
 
