@@ -69,6 +69,8 @@ COREG_STAGE_DETAILS = {
         "description": "Final coregistration result used for downstream analysis.",
     },
 }
+STATIC_DIR = Path(__file__).resolve().parent / "_static"
+FAVICON_PATH = STATIC_DIR / "favicon.png"
 
 REPORT_CSS = """
 :root {
@@ -2738,6 +2740,7 @@ def build_subject_html(summary: dict[str, Any], output_root: Path) -> None:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html_text(subject)} - MEGPrep Static Report</title>
+  <link rel="icon" type="image/png" href="../assets/favicon.png">
   <link rel="stylesheet" href="../assets/report.css">
   <script src="../assets/report.js"></script>
 </head>
@@ -3085,6 +3088,7 @@ def build_index_html(dataset_summary: dict[str, Any], subject_summaries: list[di
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MEGPrep Static HTML Report</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png">
   <link rel="stylesheet" href="assets/report.css">
   <script src="assets/report.js"></script>
 </head>
@@ -3360,6 +3364,7 @@ def build_alarms_html(subject_summaries: list[dict[str, Any]], output_root: Path
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MEGPrep Alarm Board</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png">
   <link rel="stylesheet" href="assets/report.css">
   <script src="assets/report.js"></script>
 </head>
@@ -3396,6 +3401,8 @@ def write_assets(output_root: Path) -> None:
         f.write(REPORT_CSS)
     with open(assets_dir / "report.js", "w", encoding="utf-8") as f:
         f.write(REPORT_JS)
+    if FAVICON_PATH.exists():
+        shutil.copy2(FAVICON_PATH, assets_dir / "favicon.png")
 
 
 def generate_static_report(args: argparse.Namespace) -> Path:
