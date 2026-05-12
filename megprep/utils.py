@@ -142,21 +142,16 @@ def is_xvfb_running():
 
 def find_free_display():
     """Find a free display number by checking port numbers."""
-    rng = random.SystemRandom()
     while True:
-        # Use OS entropy here; the global random seed is fixed for reproducible
-        # analysis and would otherwise keep selecting the same display.
-        display_number = rng.randint(1000, 59000)
-        lock_file = Path(f"/tmp/.X{display_number}-lock")
-        if lock_file.exists():
-            continue
-        # X11 display :N listens on TCP port 6000 + N when TCP is enabled.
+        # Generate a random display number between 1000 and 65535
+        display_number = random.randint(1000, 65535)
+        # Check if the port is free
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            if sock.connect_ex(('localhost', 6000 + display_number)) != 0:
+            if sock.connect_ex(('localhost', display_number)) != 0:
                 return display_number
 
 
-def start_xvfb():
+def start_xvfb(interactive=False):
     """Start Xvfb on a randomly chosen free display and set the DISPLAY environment variable."""
     # Find a free display number
     free_display = find_free_display()
@@ -193,6 +188,7 @@ def start_xvfb():
     _dummy_pl.add_mesh(pv.Sphere()) 
     _dummy_pl.show(auto_close=False) 
     _dummy_pl.close()
+    pv.OFF_SCREEN = not interactive
 
     return free_display
 

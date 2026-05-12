@@ -13,6 +13,8 @@ import argparse
 from utils import handle_yaml_scientific_notation,stop_xvfb,start_xvfb,set_random_seed,str2bool
 import yaml
 from pathlib import Path
+import gc
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -133,7 +135,7 @@ def visualize_source_estimate(stc, subject, subjects_dir, subj_src_path, epoch, 
     -------
     None
     """
-    display_number = start_xvfb()
+    display_number = start_xvfb(interactive=True)
     try:
         fig = mne.viz.create_3d_figure((10, 10))
         fig.plotter.close()
@@ -153,6 +155,8 @@ def visualize_source_estimate(stc, subject, subjects_dir, subj_src_path, epoch, 
                     subject=subject,
                     hemi=hs,
                     subjects_dir=subjects_dir,
+                    time_viewer=True,
+                    show_traces=True,
                     clim=dict(kind="percent", pos_lims=[0, 97.5, 100]),  # Color limits
                     views="lateral",  # View from the side
                     initial_time=time_max,  # Time point of maximum activation
@@ -188,8 +192,14 @@ def visualize_source_estimate(stc, subject, subjects_dir, subj_src_path, epoch, 
 
                 print(f"Saved {method} brain plot for {hs} hemisphere to {output_file}")
         except Exception as e:
-            logger.error("visualize_source_estimate error:",e)
+            logger.exception("visualize_source_estimate error: %s", e)
 
+    try:
+        mne.viz.close_all_3d_figures()
+    except Exception:
+        pass
+    gc.collect()
+    time.sleep(0.5)
     stop_xvfb(display_number)
 
 def compute_minimum_norm(method, evoked, fwd, noise_cov, subj_src_path, subject_id, subjects_dir, epoch_label, spacing, config, visualize):
