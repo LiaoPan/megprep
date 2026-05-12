@@ -1,18 +1,83 @@
 # !/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
+import time
+import subprocess
 import numpy as np
 import pandas as pd
 import streamlit as st
-from stpyvista import stpyvista
-from stpyvista.utils import start_xvfb
-import pyvista as pv
 import mne
 import tempfile
 from packaging.version import parse
 import altair as alt
 from pathlib import Path
 from reports.utils import in_docker,filter_files_by_keyword
+
+# --- 1. Set environment variables to avoid GLSL/VTK errors in headless mode ---
+os.environ["PYVISTA_PLOT_THEME"] = "document"
+os.environ["PYVISTA_USE_PANEL"] = "False"
+os.environ["MESA_GLSL_VERSION_OVERRIDE"] = "150"
+os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.2"
+os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+os.environ["VTK_OFFSCREEN_RENDERING"] = "1"
+os.environ["XDG_RUNTIME_DIR"] = "/tmp"
+
+import pyvista as pv
+
+
+def _find_free_xvfb_display(start=100, stop=2000):
+    for display_number in range(start, stop):
+        lock_path = Path(f"/tmp/.X{display_number}-lock")
+        socket_path = Path(f"/tmp/.X11-unix/X{display_number}")
+        if not lock_path.exists() and not socket_path.exists():
+            return display_number
+    raise RuntimeError("No free Xvfb display was found.")
+
+
+def ensure_vtk_headless_context():
+    """Start a private Xvfb display and pre-initialize VTK off-screen rendering."""
+    if st.session_state.get("SOURCE_VTK_CONTEXT_READY"):
+        pv.OFF_SCREEN = False
+        return
+
+    display_number = _find_free_xvfb_display()
+    display = f":{display_number}"
+    proc = subprocess.Popen(
+        ["Xvfb", display, "-screen", "0", "1024x768x24"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    os.environ["DISPLAY"] = display
+
+    socket_path = Path(f"/tmp/.X11-unix/X{display_number}")
+    lock_path = Path(f"/tmp/.X{display_number}-lock")
+    for _ in range(30):
+        if proc.poll() is not None:
+            raise RuntimeError(f"Xvfb failed to start on {display}.")
+        if socket_path.exists() or lock_path.exists():
+            break
+        time.sleep(0.1)
+    else:
+        proc.terminate()
+        raise RuntimeError(f"Timed out waiting for Xvfb on {display}.")
+
+    pv.OFF_SCREEN = True
+    dummy_plotter = pv.Plotter(off_screen=True)
+    dummy_plotter.add_mesh(pv.Sphere())
+    dummy_plotter.show(auto_close=False)
+    dummy_plotter.close()
+    # MNE's time_viewer/show_traces needs a live interactor; keep plotting interactive
+    # after the off-screen warm-up, matching megprep/source_localization.py.
+    pv.OFF_SCREEN = False
+
+    st.session_state.SOURCE_XVFB_PROCESS = proc
+    st.session_state.SOURCE_VTK_CONTEXT_READY = True
+
+
+# --- 2. Start a virtual display and pre-initialize VTK ---
+ensure_vtk_headless_context()
 
 # --- Custom CSS Styling ---
 st.markdown("""
@@ -101,20 +166,6 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
-# --- 1. 设置环境变量 (在无头环境中避免 GLSL 错误) ---
-os.environ["MESA_GLSL_VERSION_OVERRIDE"] = "150"
-os.environ["MESA_GL_VERSION_OVERRIDE"] = "3.2"
-os.environ["XDG_RUNTIME_DIR"] = "/tmp"
-# 如果在无头环境，需要指定 DISPLAY
-# virtual GUI |
-# Xvfb :99 -screen 0 1920x1080x24 &
-os.environ["DISPLAY"] = ":99"
-
-# --- 启动虚拟显示 (Xvfb) ---
-if "IS_XVFB_RUNNING" not in st.session_state:
-    start_xvfb()
-    st.session_state.IS_XVFB_RUNNING = True
 
 # Main title with custom styling
 st.markdown('<h2 class="main-header">🧠 Source Localization</h2>', unsafe_allow_html=True)
@@ -282,23 +333,8 @@ if prefixes:
                 brain = stc.plot(**surfer_kwargs)
                 brain.set_time(time)
 
-                # Add the peak activation location as a blue foci on the brain | work and same!.
-                # if selected_ori_hemi == "split":
-                #     _peak_hemi = 'rh'
-                # else:
-                #     _peak_hemi = peak_hemi
-                # foci_color = 'red'
-                # brain.add_foci(
-                #     vertno_max,
-                #     coords_as_verts=True,
-                #     hemi=_peak_hemi,
-                #     color=foci_color,
-                #     scale_factor=0.8,
-                #     alpha=1.0,
-                # )
-                # brain.plot_time_course(hemi=_peak_hemi,vertex_id=vertno_max,color=foci_color,update=True)
                 try:
-                    # 对于 PyVista backend
+                    # For the PyVista backend
                     if hasattr(brain, '_renderer') and hasattr(brain._renderer, 'plotter'):
                         brain._renderer.plotter.render()
                 except Exception as e:
