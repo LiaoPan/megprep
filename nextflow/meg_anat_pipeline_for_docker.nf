@@ -1,10 +1,11 @@
 #!/usr/bin/env nextflow
-// nextflow run meg_pipeline.nf -entry dcm2niix
+// Run with a project-specific config, for example:
+// nextflow run nextflow/meg_anat_pipeline_for_docker.nf -c nextflow/nextflow.config
 nextflow.enable.dsl=2
 
 // include { deepprep } from '/opt/DeepPrep/deepprep/nextflow/deepprep.nf'
 
-log.info "MEG Preprocessing Pipeline"
+log.info "MEGPrep Anatomy and MEG Preprocessing Pipeline"
 log.info "============================="
 log.info ""
 log.info "Start time: $workflow.start"
@@ -16,7 +17,9 @@ workflow.onComplete {
     log.info "Execution duration: $workflow.duration"
 }
 
-// ################################## MRI (Anatomy T1w) Preprocessing ################################################################
+// =============================================================================
+// MRI anatomy preprocessing
+// =============================================================================
 
 
 process import_MRI_dataset {
@@ -59,7 +62,7 @@ process read_nifti_files {
     """
 }
 
-// T1 DICOM to NifTI[v1]
+// Convert T1-weighted DICOM data to NIfTI.
 process dcm2niix {
     tag "DICOM to Nifti"
 
@@ -89,7 +92,7 @@ process dcm2niix {
 }
 
 
-// Step: Run FreeSurfer recon-all process[v1]
+// Run FreeSurfer recon-all and build the head surface.
 process run_freesurfer {
     tag "${subject_name}"
 
@@ -117,7 +120,7 @@ process run_freesurfer {
     """
 }
 
-// Use DeepPrep instead of recon-all
+// Run DeepPrep as an alternative anatomical preprocessing backend.
 process run_deepprep {
     tag "${subject_name}"
 //     debug true
@@ -172,7 +175,7 @@ process run_deepprep {
     """
 }
 
-// mkheadsurf process
+// Build the FreeSurfer head surface after external reconstruction.
 process run_mkheadsurf {
     tag "${subject_name}"
 
@@ -192,7 +195,7 @@ process run_mkheadsurf {
     """
 }
 
-// Generate BEM model using Python-based `gen_bem_from_anat`
+// Generate the BEM model from the anatomical reconstruction.
 process generate_bem {
     tag "${subject_name}"
 
@@ -219,9 +222,11 @@ process generate_bem {
 }
 
 
-// ################################## MEG Preprocessing ################################################################
+// =============================================================================
+// MEG preprocessing
+// =============================================================================
 
-// Import MEG data
+// Discover MEG input files from the configured dataset.
 process import_MEG_dataset {
 
     input:
@@ -276,7 +281,7 @@ process meg_preproc_osl {
 }
 
 
-// Preproc for MEG
+// Detect bad channels and bad time segments.
 process detect_Artifacts {
     tag "${raw_subject_basename}"
 
@@ -286,7 +291,7 @@ process detect_Artifacts {
 
     output:
     path "${preproc_dir}/artifact_report/${raw_subject_parent}/*_bad_channels.txt",emit: bad_channels
-    path "${preproc_dir}/artifact_report/${raw_subject_parent}/*_bad_segments.txt",emit: bad_segments // mne annotations
+    path "${preproc_dir}/artifact_report/${raw_subject_parent}/*_bad_segments.txt",emit: bad_segments // MNE annotations
 //     val "${preproc_dir}/${raw_subject_basename}/${raw_subject_basename}_preproc-raw${params.file_suffix}",emit: preproc_subject_paths
     val "${raw_subject_path}",emit: preproc_subject_paths
 
@@ -510,7 +515,7 @@ process coregistrations {
     """
 }
 
-// Epochs
+// Estimate covariance from epoched data.
 process compute_covariances {
     tag "${raw_subject_basename}"
 
@@ -540,7 +545,7 @@ process compute_covariances {
     """
 }
 
-// Raw
+// Estimate covariance from continuous raw data.
 process compute_covariance {
     tag "${raw_subject_dir_basename}"
 
@@ -668,23 +673,53 @@ process source_imaging {
 
 }
 
+// Build the dataset-level portable static HTML report.
+process generate_static_html_report {
+    tag "static-html-report"
+
+    input:
+    val source_artifacts
+
+    output:
+    path "static_html_report_done.txt", emit: completion_marker
+
+    script:
+    report_script = "${params.code_dir}/reports/static_html_report.py"
+    report_root = params.preproc_dir
+    report_output_dir = "${params.output_dir}/static_html_report"
+    zip_output = false
+    """
+    python ${report_script} \\
+        --report_root ${report_root} \\
+        --output_dir ${report_output_dir} \\
+        --bad_channel_threshold ${params.bad_channel_threshold} \\
+        --bad_segment_threshold ${params.bad_segment_threshold} \\
+        --coreg_mean_threshold ${params.coreg_mean_threshold} \\
+        --coreg_max_threshold ${params.coreg_max_threshold} \\
+        --epoch_reject_rate_threshold ${params.epoch_reject_rate_threshold} \\
+        --zip_output ${zip_output}
+
+    echo "Static HTML report generated at ${report_output_dir}" > static_html_report_done.txt
+    """
+}
+
 import java.nio.file.Path
 class AnatOutput {
     String mri_subject_id
     Path fs_subjects_dir
 
-    // Constructor
+    // Keep anatomy outputs available for both channel-backed and pre-existing anatomy modes.
     AnatOutput(String mri_subject_id, Path fs_subjects_dir) {
-        this.mri_subject_id = mri_subject_id // Can be null
-        this.fs_subjects_dir = fs_subjects_dir // Cannot be null; enforce if needed
+        this.mri_subject_id = mri_subject_id
+        this.fs_subjects_dir = fs_subjects_dir
     }
 }
 
 
-// MEG Preprocessing Workflow [include MRI(Anatomy) Preprocessing]
+// MEG preprocessing workflow with optional MRI anatomy preprocessing.
 workflow {
     if (params.do_fs) {
-        // ##########################Anatomy preprocessing Workflow####################################
+        // Anatomy preprocessing workflow.
         if (params.is_bids) {
             println("params.is_bids:${params.is_bids}")
 
@@ -714,7 +749,7 @@ workflow {
 
                 t1_files = t1_nifti_files
 
-                // Run anatomical preprocessing
+                // Derive unique anatomical subject identifiers from BIDS T1w files.
 //                 subject_names = t1_nifti_files.map { filePath ->
 //                     filePath.tokenize('/').last().replace(".nii.gz", "")
 //                 }
@@ -732,7 +767,7 @@ workflow {
 
                     fs_recon = run_freesurfer(t1_files, subject_names, params.fs_subjects_dir)
 
-                    // BEM
+                    // Generate BEM surfaces from the FreeSurfer reconstruction.
                     fs_anatomy_output = generate_bem(fs_recon.fs_subject_dir,fs_recon.mri_subject_id, params.bem_config, params.fs_subjects_dir)
 
             } else if (params.anatomy_preprocess_method == 'deepprep') {
@@ -744,7 +779,7 @@ workflow {
 //                     subject_names = subject_names.unique()
 //                     subject_names.view {" $it "}
 
-                    // Run anatomical preprocessing
+                    // Run anatomical preprocessing with DeepPrep.
                     fs_recon = run_deepprep(params.t1_bids_dir, subject_names, params.fs_subjects_dir, params.preproc_dir)
 
                     subject_names = Channel.fromPath("${params.fs_subjects_dir}/*", type: 'dir')
@@ -752,18 +787,18 @@ workflow {
                                         .map { it.getBaseName() }
                     subject_names.view { name -> println "MRI Subject name: ${name}" }
 
-                    // Run mkheadsurf
+                    // Build the head surface required by downstream BEM generation.
 //                     subject_names = "sub-01_run-1_T1w" // for debug
 //                     fs_recon_mk = run_mkheadsurf(subject_names,params.fs_subjects_dir,fs_recon.mri_subject_id)
                     fs_recon_mk = run_mkheadsurf(fs_recon.mri_subject_id,params.fs_subjects_dir)
-                    // Run BEM generation
+                    // Generate BEM surfaces from the DeepPrep reconstruction.
                     fs_anatomy_output = generate_bem(fs_recon_mk.fs_subject_dir,fs_recon_mk.mri_subject_id,params.bem_config, params.fs_subjects_dir)
             } else {
                 error "Unsupported anatomy preprocessing method: ${params.anatomy_preprocess_method}. Supported methods are 'freesurfer' and 'deepprep'."
             }
         } else {
-            // 可以处理DICOM 以及 非BIDS格式的T1w数据
-            // Convert DICOM to NIfTI
+            // Support non-BIDS T1w inputs in DICOM or NIfTI format.
+            // Convert DICOM inputs to NIfTI when needed.
             if (params.t1_input_type == 'dicom') {
                 println "params.t1_dir: ${params.t1_dir}"
                 t1_dicom_dirs = Channel.fromPath("${params.t1_dir}/*/", type: 'dir')
@@ -778,11 +813,11 @@ workflow {
                 error "Unsupported t1_input_type: ${params.t1_input_type}. Supported types are 'dicom' and 'nifti'."
             }
 
-            // Run anatomical preprocessing
+            // Run anatomical preprocessing.
             subject_names = t1_files.map { it.name.replace(".nii.gz", "") }
             fs_recon = run_freesurfer(t1_files, subject_names, params.fs_subjects_dir)
 
-            // BEM
+            // Generate BEM surfaces from the anatomical reconstruction.
             fs_anatomy_output = generate_bem(fs_recon.fs_subject_dir, fs_recon.mri_subject_id, params.bem_config, params.fs_subjects_dir)
 
         }
@@ -795,9 +830,9 @@ workflow {
     
 //     println("Anatomy output: $fs_anatomy_output")
 
-    //  ######################MEG Preprocessing Workflow############################################
+    // MEG preprocessing workflow.
    if( !params.do_only_anatomy ) {
-        // Load MEG datasets
+        // Discover MEG input files.
        raw_files = import_MEG_dataset(params.dataset_dir,params.dataset_format,params.file_suffix)
 
        raw_files.imported_meg_data
@@ -806,38 +841,38 @@ workflow {
                .filter { it }
                .set {raw_files_path}
 
-       // Preprocessing
+       // Apply the configured signal preprocessing recipe.
        preproc_subject_paths = meg_preproc_osl(params.dataset_dir,raw_files_path,params.preproc_dir,params.preproc_config)
 
-      // Automatic Artifact Detection
+      // Detect artifacts automatically.
       preproc_subject_paths_dta = detect_Artifacts(params.preproc_dir,preproc_subject_paths)
 
-       // Run ICA
+       // Fit ICA decomposition.
        preproc_subject_paths_ica = run_ICA(params.preproc_dir,
                                         preproc_subject_paths_dta.preproc_subject_paths,
                                         preproc_subject_paths_dta.bad_channels,
                                         preproc_subject_paths_dta.bad_segments)
 
-       // automatic IC Label
+       // Label artifact-related ICs automatically.
        preproc_subject_paths_ica_label = run_IC_label(params.preproc_dir,
                                             preproc_subject_paths_ica.preproc_subject_paths,
                                             preproc_subject_paths_ica.ica_fif_paths,
                                             preproc_subject_paths_ica.ica_sources,
                                             preproc_subject_paths_ica.ica_expvars)
 
-       // Apply ICA
+       // Apply ICA cleanup.
        preproc_subject_paths_clean = apply_ICA(params.preproc_dir,
                                             preproc_subject_paths_ica_label.preproc_subject_paths,
                                             preproc_subject_paths_ica_label.marked_components)
 
-        // Epochs
+        // Create analysis epochs.
     //     epoch_subject_paths = epochs(params.preproc_dir,preproc_subject_paths_clean.preproc_subject_paths)
 
         events_files = raw_files_path.collect { raw_subject_path ->
             return raw_subject_path.replaceAll(/_meg\..*/, '_events.tsv')
         }
 
-        //filter out empty or resting meg data.
+        // Filter out empty-room or resting-state data before task epoching.
         if (params.covar_type == 'raw'){
             preproc_subject_paths_clean.preproc_subject_paths
                     .filter { orig_path_obj ->
@@ -869,7 +904,7 @@ workflow {
                     def raw_data_file = orig_path.replaceAll(/task-[^_]+/, "task-${params.raw_covariance_task_id}")
                     tuple(orig_path_obj, raw_data_file)
                 }
-                .filter { it != null } // Remove filtered-out (null) items
+                .filter { it != null } // Remove filtered-out items.
                 .filter { orig_path_obj, raw_data_file ->
                     new File(raw_data_file).exists()
                 }
@@ -880,7 +915,7 @@ workflow {
             error "Unsupported covar_type: ${params.covar_type}."
         }
 
-        // MEG-MRI Coregistration
+        // MEG-MRI coregistration.
         target_subject_id = preproc_subject_paths_clean.target_mri_subject_id
     //     target_subject_id.view { "target_subject_id: ${it}" }
         if (fs_anatomy_output?.mri_subject_id) {
@@ -892,12 +927,12 @@ workflow {
 
             trans_subject_paths = coregistration(params.preproc_dir,core_inputs)
 
-            // wait epochs and trans results
+            // Wait for epoch and transform results before forward modeling.
             epoch_subject_id = epoch_subject_paths.meg_subject_id
             fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
             // fwd_inputs.view {"fwd_inputs: ${it} "}
 
-            // Forward-Solution
+            // Forward solution.
 //             fwds = forward_solution(params.preproc_dir,
 //                             trans_subject_paths,
 //                             params.fs_subjects_dir)
@@ -906,13 +941,16 @@ workflow {
                             params.fs_subjects_dir,
                             fwd_inputs)
 
-            // fwds and covs have the same meg_subject_id
+            // Forward and covariance outputs share the same MEG subject identifier (meg_subject_id).
             cov_subject_id = cov_files.meg_subject_id
             source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
             //source_inputs.view {"source imaging: ${it} "}
 
-            // Source Imaging
-            source_imaging(params.src_type, params.preproc_dir, source_inputs)
+            // Source imaging.
+            source_results = source_imaging(params.src_type, params.preproc_dir, source_inputs)
+
+            // Generate the global static HTML report after all MEG outputs are ready.
+            generate_static_html_report(source_results.source_files.collect())
 
 //             if ( params.src_type == 'epochs'){
 //                     source_imaging(params.preproc_dir,fwds.epoch_files,cov_files.bl_cov_files)
@@ -924,11 +962,11 @@ workflow {
 
         } else {
                 println "fs_anatomy_output.mri_subject_id is not set."
-                // Coregistration
+                // Coregistration.
                 trans_subject_paths = coregistrations(params.preproc_dir,preproc_subject_raw,fs_anatomy_output.fs_subjects_dir)
 
-                // Forward-Solution
-                // wait epochs and trans results
+                // Forward solution.
+                // Wait for epoch and transform results before forward modeling.
                 epoch_subject_id = epoch_subject_paths.meg_subject_id
                 fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
                 //fwd_inputs.view {"fwd_inputs: ${it} "}
@@ -937,12 +975,15 @@ workflow {
                                 params.fs_subjects_dir,
                                 fwd_inputs)
 
-                // Source Imaging
+                // Source imaging.
                 cov_subject_id = cov_files.meg_subject_id
                 source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
                 //source_inputs.view {"source imaging: ${it} "}
 
-                source_imaging(params.src_type, params.preproc_dir, source_inputs)
+                source_results = source_imaging(params.src_type, params.preproc_dir, source_inputs)
+
+                // Generate the global static HTML report after all MEG outputs are ready.
+                generate_static_html_report(source_results.source_files.collect())
         }
     }
 
