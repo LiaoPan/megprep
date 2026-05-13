@@ -22,6 +22,8 @@ softwares/run_deep.sh
 softwares/tktools
 .nextflow/
 .venv/
+.nextflow.log
+.nextflow.log.*
 megprep/temp/
 megprep/tools/DeepPrep
 megprep/tools/MEGNet
