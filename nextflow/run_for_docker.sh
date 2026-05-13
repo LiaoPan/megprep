@@ -3,8 +3,7 @@
 #$ bash run_for_docker.sh -i /data/liaopan/datasets/Holmes_cn_single/raw --fs_license_file /data/liaopan/megprep/license.txt --fs_subjects_dir /data/liaopan/datasets/Holmes_cn/smri
 #  bash run_for_docker.sh -i /data/liaopan/datasets/Holmes_cn_single/raw --fs_license_file /data/liaopan/megprep/license.txt --fs_subjects_dir /data/liaopan/datasets/Holmes_cn/smri -o /data/liaopan/datasets/Holmes_cn_single
 # Exit on error
-# set -e
-set +e
+set -e
 
 # Default configuration file and parameters
 CONFIG_FILE="/program/nextflow/nextflow.config"
@@ -13,6 +12,12 @@ INPUT_DIR=""
 OUTPUT_DIR=""
 STEPS=""
 FS_LICENSE_FILE=""
+FS_SUBJECTS_DIR=""
+T1_DIR=""
+T1_INPUT_TYPE=""
+ANAT_ONLY=false
+MEG_ONLY=false
+VIEW_REPORT=false
 NEXTFLOW_FILE="/program/nextflow/meg_pipeline.nf"
 STREAMLIT_APP_PATH="/program/megprep/reports/reports.py"
 nextflow_args=()
@@ -35,8 +40,8 @@ while [[ "$#" -gt 0 ]]; do
         --t1_input_type) T1_INPUT_TYPE="$2"; shift ;;
 
         # options for specifying only one part
-        --anat_only) ANAT_ONLY=true; shift ;;
-        --meg_only) MEG_ONLY=true; shift ;;
+        --anat_only) ANAT_ONLY=true ;;
+        --meg_only) MEG_ONLY=true ;;
 
         # online reports
         -r|--view_report) VIEW_REPORT=true ;;
@@ -50,14 +55,14 @@ while [[ "$#" -gt 0 ]]; do
             echo "  -c, --config          Specify the Nextflow config file (default: nextflow.config)"
             echo "  -i, --input           Specify the input directory"
             echo "  -o, --output          Specify the output directory(including report results.)"
-            echo "  -s, --steps           Specify the steps to execute (e.g., preproc,epoch,source)"
+            echo "  -s, --steps           Same as Nextflow --steps / params.steps (e.g. all, meg_all, anatomy, report, meg_epochs,skip_ica)"
             echo "  -r, --view-report     Run Streamlit to view the report (does not run Nextflow)"
             echo "  --fs_license_file     Specify the FreeSurfer license file"
             echo "  --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory containing processed T1 results"
             echo "  --t1_dir              Specify the T1 image directory"
             echo "  --t1_input_type       Specify the T1 input type"
-            echo "  --anat_only           Run only the FreeSurfer related steps"
-            echo "  --meg_only            Run only the MEG related steps"
+            echo "  --anat_only           Deprecated shortcut for --steps anatomy"
+            echo "  --meg_only            Deprecated shortcut for --steps meg_all"
             echo "  --resume              Resume the previous run(nextflow options)"
             exit 0
             ;;
@@ -89,6 +94,11 @@ if [ -z "$INPUT_DIR" ]; then
     exit 1
 fi
 
+if [ -z "$OUTPUT_DIR" ]; then
+    echo "Output directory must be specified."
+    exit 1
+fi
+
 # Check if the config file exists
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "Error: Configuration file not found: $CONFIG_FILE"
@@ -98,7 +108,8 @@ fi
 
 echo "Using configuration file: $CONFIG_FILE"
 
-cp $CONFIG_FILE $RUN_CONFIG_FILE
+mkdir -p "$OUTPUT_DIR"
+cp "$CONFIG_FILE" "$RUN_CONFIG_FILE"
 
 # Update dataset_dir and output_dir in the configuration file
 if [ ! -z "$INPUT_DIR" ]; then
@@ -116,9 +127,45 @@ if [ ! -z "$FS_SUBJECTS_DIR" ]; then
     sed -i "s|^\s*fs_subjects_dir\s*=.*|    fs_subjects_dir = \"$FS_SUBJECTS_DIR\"|" "$RUN_CONFIG_FILE"
 fi
 
+if [ ! -z "$FS_LICENSE_FILE" ]; then
+    echo "Using FreeSurfer license file: $FS_LICENSE_FILE"
+    sed -i "s|^\s*fs_license\s*=.*|    fs_license = \"$FS_LICENSE_FILE\"|" "$RUN_CONFIG_FILE"
+fi
+
+if [ ! -z "$T1_DIR" ]; then
+    echo "Setting t1_dir in config to: $T1_DIR"
+    sed -i "s|^\s*t1_dir\s*=.*|    t1_dir = \"$T1_DIR\"|" "$RUN_CONFIG_FILE"
+fi
+
+if [ ! -z "$T1_INPUT_TYPE" ]; then
+    echo "Setting t1_input_type in config to: $T1_INPUT_TYPE"
+    sed -i "s|^\s*t1_input_type\s*=.*|    t1_input_type = \"$T1_INPUT_TYPE\"|" "$RUN_CONFIG_FILE"
+fi
+
 
 # Call Nextflow to run the pipeline with specified configurations
 echo "Running Nextflow pipeline..."
+
+steps_args=()
+if [ "$ANAT_ONLY" = true ] && [ "$MEG_ONLY" = true ]; then
+    echo "Error: --anat_only and --meg_only cannot be used together. Prefer --steps anatomy or --steps meg_all."
+    exit 1
+fi
+
+if [ -z "$STEPS" ] && [ "$ANAT_ONLY" = true ]; then
+    STEPS="anatomy"
+    echo "Warning: --anat_only is deprecated; using --steps anatomy."
+fi
+
+if [ -z "$STEPS" ] && [ "$MEG_ONLY" = true ]; then
+    STEPS="meg_all"
+    echo "Warning: --meg_only is deprecated; using --steps meg_all."
+fi
+
+if [ -n "$STEPS" ]; then
+    echo "Setting steps (Nextflow params.steps): $STEPS"
+    steps_args=(--steps "$STEPS")
+fi
 
 # activate Anaconda virtualenv and virtual display
 #/usr/bin/supervisord  -c /etc/supervisor/conf.d/supervisord.conf
@@ -129,10 +176,11 @@ echo "Running Nextflow pipeline..."
 
 nextflow run "${NEXTFLOW_FILE}" \
     -c "${RUN_CONFIG_FILE}" \
+    "${steps_args[@]}" \
     -with-report "${OUTPUT_DIR}/report.html" \
     -with-timeline "${OUTPUT_DIR}/timeline.html" \
     -with-trace \
     "${nextflow_args[@]}"
 
-cp $RUN_CONFIG_FILE "${OUTPUT_DIR}"/nextflow.config
+cp "$RUN_CONFIG_FILE" "${OUTPUT_DIR}/nextflow.config"
 chmod -R 777 /output

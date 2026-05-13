@@ -12,12 +12,25 @@ from tqdm.std import tqdm
 from typing import Literal, Optional, List, Union
 from mne_bids import BIDSPath, read_raw_bids, print_dir_tree, make_report, get_entity_vals
 
+def _normalize_exclude_keywords(value) -> Optional[List[str]]:
+    """Turn YAML config value into a list of non-empty strings, or None if unset."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value] if value.strip() else None
+    if isinstance(value, list):
+        out = [str(x).strip() for x in value if x is not None and str(x).strip()]
+        return out or None
+    return None
+
+
 def read_meg_dataset(dataset_dir: Union[str, Path], file_suffix: str = '.fif',
                       dataset_format: Optional[Literal['bids', 'raw','auto']] = None,
                       datatype: Literal['meg'] = 'meg', subjects: Optional[List[str]] = None,
                       sessions: Optional[List[str]] = None, tasks: Optional[List[str]] = None,
                       runs: Optional[List[str]] = None, print_dir: bool = False,
-                      bids_report: bool = False) -> List:
+                      bids_report: bool = False,
+                      raw_exclude_keywords: Optional[List[str]] = None) -> List:
     """
     General function to read MEG datasets, supporting both BIDS and raw formats.
 
@@ -27,6 +40,10 @@ def read_meg_dataset(dataset_dir: Union[str, Path], file_suffix: str = '.fif',
         Path to the dataset directory.
     file_suffix : str, optional
         File suffix to filter raw dataset files (default is '.fif').
+    raw_exclude_keywords : list of str, optional
+        For ``dataset_format='raw'`` only: basenames containing any of these
+        substrings (case-insensitive) are skipped. Use to drop non-MEG ``.fif``
+        files (for example ``phantom``, ``crosstalk``) that share the same suffix.
     dataset_format : {'bids', 'raw','auto'}, optional
         Format of the dataset. If None, it will be auto-detected.
     datatype : {'meg'}, optional
@@ -136,10 +153,19 @@ def read_meg_dataset(dataset_dir: Union[str, Path], file_suffix: str = '.fif',
     # Handle raw dataset
     elif dataset_format == 'raw':
         raw_list = []
+        exclude_lower = None
+        if raw_exclude_keywords:
+            exclude_lower = [k.lower() for k in raw_exclude_keywords]
         for root, _, files in os.walk(dataset_dir):
             for file in files:
-                if file.endswith(file_suffix):
-                    raw_list.append(os.path.join(root, file))
+                if not file.endswith(file_suffix):
+                    continue
+                if exclude_lower:
+                    file_lower = file.lower()
+                    if any(k in file_lower for k in exclude_lower):
+                        print(f"raw_exclude_keywords excluded: {os.path.join(root, file)}")
+                        continue
+                raw_list.append(os.path.join(root, file))
         if not raw_list:
             raise ValueError(f"No raw data files found in {dataset_dir}.")
 
@@ -208,7 +234,8 @@ if __name__ == "__main__":
         subjects=config.get('subject_id'),
         sessions=config.get('session_id'),
         tasks=config.get('task'),
-        runs=config.get('run_id')
+        runs=config.get('run_id'),
+        raw_exclude_keywords=_normalize_exclude_keywords(config.get('raw_exclude_keywords')),
     )
 
     #filtering: keep only the main file, exclude files that are split (e.g. -1.fif, -2.fif, etc.)

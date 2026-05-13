@@ -3,6 +3,8 @@
 // nextflow run nextflow/meg_anat_pipeline_for_docker.nf -c nextflow/nextflow.config
 nextflow.enable.dsl=2
 
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 // include { deepprep } from '/opt/DeepPrep/deepprep/nextflow/deepprep.nf'
 
 log.info "MEGPrep Anatomy and MEG Preprocessing Pipeline"
@@ -253,7 +255,7 @@ process import_MEG_dataset {
 }
 
 process meg_preproc_osl {
-    tag "${raw_subject_path}"
+    tag "${raw_subject_basename}"
 
     memory { 6.GB * task.attempt }
     errorStrategy { task.exitStatus in 137..140 ? 'retry' : 'terminate' }
@@ -292,7 +294,6 @@ process detect_Artifacts {
     output:
     path "${preproc_dir}/artifact_report/${raw_subject_parent}/*_bad_channels.txt",emit: bad_channels
     path "${preproc_dir}/artifact_report/${raw_subject_parent}/*_bad_segments.txt",emit: bad_segments // MNE annotations
-//     val "${preproc_dir}/${raw_subject_basename}/${raw_subject_basename}_preproc-raw${params.file_suffix}",emit: preproc_subject_paths
     val "${raw_subject_path}",emit: preproc_subject_paths
 
     script:
@@ -423,7 +424,7 @@ process epochs {
     script:
     script_name = "${params.code_dir}/epochs.py"
     raw_subject_basename = file(raw_subject_path).getBaseName()
-    filtered_raw_subject_basename = file(raw_subject_path).getBaseName().replace("_meg_preproc-raw_clean_raw", "")
+    filtered_raw_subject_basename = file(raw_subject_path).getBaseName().replace("_meg_preproc-raw_clean_raw", "").replace("_meg_preproc-raw", "")
     raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
 
     dataset_dir_parent_dir = file(dataset_dir).getParent()
@@ -680,6 +681,8 @@ process generate_static_html_report {
 
     input:
     val source_artifacts
+    path run_manifest
+    val preserve_existing_manifest
 
     output:
     path "static_html_report_done.txt", emit: completion_marker
@@ -690,9 +693,37 @@ process generate_static_html_report {
     report_output_dir = "${params.output_dir}/static_html_report"
     zip_output = false
     """
-    python ${report_script} \\
-        --report_root ${report_root} \\
-        --output_dir ${report_output_dir} \\
+    set -euo pipefail
+    manifest_dir="${params.preproc_dir}/logs"
+    manifest_dst="\${manifest_dir}/megprep_run_manifest.json"
+    manifest_backup=""
+    mkdir -p "\${manifest_dir}"
+
+    if [ "${preserve_existing_manifest}" = "true" ] && [ -f "\${manifest_dst}" ]; then
+        manifest_backup="\${manifest_dst}.before_report_only.\$\$"
+        cp "\${manifest_dst}" "\${manifest_backup}"
+    fi
+
+    restore_manifest() {
+        if [ "${preserve_existing_manifest}" = "true" ]; then
+            if [ -n "\${manifest_backup}" ] && [ -f "\${manifest_backup}" ]; then
+                mv "\${manifest_backup}" "\${manifest_dst}"
+            else
+                rm -f "\${manifest_dst}"
+            fi
+        fi
+    }
+    trap restore_manifest EXIT
+
+    # When the workflow wrote manifest directly under preprocessed/logs, Nextflow stages it in
+    # the work dir as a symlink to the same path as manifest_dst; cp then errors (same file).
+    if [ ! "${run_manifest}" -ef "\${manifest_dst}" ]; then
+        cp "${run_manifest}" "\${manifest_dst}"
+    fi
+
+    python "${report_script}" \\
+        --report_root "${report_root}" \\
+        --output_dir "${report_output_dir}" \\
         --bad_channel_threshold ${params.bad_channel_threshold} \\
         --bad_segment_threshold ${params.bad_segment_threshold} \\
         --coreg_mean_threshold ${params.coreg_mean_threshold} \\
@@ -717,9 +748,232 @@ class AnatOutput {
 }
 
 
-// MEG preprocessing workflow with optional MRI anatomy preprocessing.
+
+/**
+ * Parse params.steps into pipeline flags.
+ * Primary: report | anatomy | all | meg_all | meg_artifacts | meg_ica | meg_epochs (aliases: meg, artifacts, ica, epochs)
+ * Modifiers: skip_ica (meg_epochs only), with_anatomy (meg_* only; not meg_all)
+ */
+Map parseMegPipelineSteps(String stepsRaw) {
+    def parts = stepsRaw.split(',').collect { it.trim().toLowerCase() }.findAll { it.size() > 0 }
+    if (!parts) {
+        throw new IllegalArgumentException("params.steps is empty")
+    }
+    def aliases = [meg: 'meg_all', artifacts: 'meg_artifacts', ica: 'meg_ica', epochs: 'meg_epochs']
+    def primary = aliases.containsKey(parts[0]) ? aliases[parts[0]] : parts[0]
+    def mods = parts.size() > 1 ? parts[1..-1].collect { it.trim().toLowerCase() }.toSet() : [] as Set
+
+    def allowedMods = ['skip_ica', 'with_anatomy'] as Set
+    mods.each { m ->
+        if (!allowedMods.contains(m)) {
+            throw new IllegalArgumentException("Unknown steps modifier: ${m}. Allowed: skip_ica, with_anatomy")
+        }
+    }
+
+    if (primary == 'meg_all' && mods.contains('with_anatomy')) {
+        throw new IllegalArgumentException("steps=meg_all cannot be combined with with_anatomy; use steps=all or meg_*,with_anatomy")
+    }
+
+    def skipIca = mods.contains('skip_ica')
+    def withAnatomy = mods.contains('with_anatomy')
+
+    int megStage = -1
+    boolean runAnatomy = false
+    boolean runMeg = false
+
+    switch (primary) {
+        case 'report':
+            break
+        case 'anatomy':
+            runAnatomy = true
+            break
+        case 'all':
+            runAnatomy = true
+            runMeg = true
+            megStage = 3
+            break
+        case 'meg_all':
+            runMeg = true
+            megStage = 3
+            break
+        case 'meg_artifacts':
+            runMeg = true
+            megStage = 0
+            runAnatomy = withAnatomy
+            break
+        case 'meg_ica':
+            runMeg = true
+            megStage = 1
+            runAnatomy = withAnatomy
+            break
+        case 'meg_epochs':
+            runMeg = true
+            megStage = 2
+            runAnatomy = withAnatomy
+            break
+        default:
+            throw new IllegalArgumentException("Unknown steps '${primary}'. Use: report, anatomy, all, meg_all, meg_artifacts, meg_ica, meg_epochs (aliases: meg, artifacts, ica, epochs).")
+    }
+
+    if (skipIca && megStage != 2) {
+        throw new IllegalArgumentException("skip_ica is only supported with meg_epochs (e.g. steps=meg_epochs,skip_ica). Full all/meg_all requires ICA-clean raw for forward/source.")
+    }
+
+    return [primary: primary, megStage: megStage, runAnatomy: runAnatomy, runMeg: runMeg, skipIca: skipIca]
+}
+
 workflow {
-    if (params.do_fs) {
+    def cfg = parseMegPipelineSteps(params.steps ?: 'meg_all')
+
+    log.info "Pipeline steps: primary=${cfg.primary}, megStage=${cfg.megStage}, runAnatomy=${cfg.runAnatomy}, runMeg=${cfg.runMeg}, skipIca=${cfg.skipIca}"
+
+    def snapshot = [
+            dataset_dir: params.dataset_dir?.toString(),
+            output_dir: params.output_dir?.toString(),
+            preproc_dir: params.preproc_dir?.toString(),
+            code_dir: params.code_dir?.toString(),
+            fs_subjects_dir: params.fs_subjects_dir?.toString(),
+            anatomy_preprocess_method: params.anatomy_preprocess_method?.toString(),
+            dataset_format: params.dataset_format?.toString(),
+            covar_type: params.covar_type?.toString(),
+            src_type: params.src_type?.toString(),
+            is_bids: params.is_bids
+    ]
+    def partialManifest = [
+        manifest_schema_version: 2,
+        steps_raw: (params.steps ?: 'meg_all').toString(),
+        parsed: [
+            primary: cfg.primary,
+            meg_stage: cfg.megStage,
+            run_anatomy: cfg.runAnatomy,
+            run_meg: cfg.runMeg,
+            skip_ica: cfg.skipIca
+        ],
+        params_snapshot: snapshot
+    ]
+    if (cfg.primary == 'report') {
+        partialManifest.report_only = true
+        def mf = new File("${params.preproc_dir}/logs/megprep_run_manifest.json")
+        if (mf.exists()) {
+            try {
+                def prev = new JsonSlurper().parse(mf) as Map
+                def p = prev?.parsed as Map
+                if (p && p.primary?.toString() != 'report' && p.run_meg == true) {
+                    partialManifest.parsed = p
+                    partialManifest.params_snapshot = (prev.params_snapshot instanceof Map) ? prev.params_snapshot : snapshot
+                    partialManifest.pipeline_steps_raw = (prev.pipeline_steps_raw ?: prev.steps_raw)?.toString()
+                }
+            } catch (Exception e) {
+                log.warn "Could not merge prior megprep_run_manifest.json: ${e.message}"
+            }
+        }
+    }
+    partialManifest['workflow_meta'] = [
+        session_id: workflow.sessionId?.toString() ?: '',
+        run_name: workflow.runName?.toString() ?: '',
+        start: workflow.start?.toString() ?: '',
+        nextflow_version: workflow.nextflow?.version?.toString() ?: '',
+        launch_dir: workflow.launchDir?.toString() ?: '',
+        project_dir: workflow.projectDir?.toString() ?: ''
+    ]
+    def manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(partialManifest))
+    // Write manifest synchronously in the workflow driver (no extra process) so the console
+    // task list matches older runs and local executor noise stays lower.
+    def run_manifest_ch
+    if (cfg.primary == 'report') {
+        def scratchDir = new File("${params.output_dir}")
+        scratchDir.mkdirs()
+        def scratchManifest = new File(scratchDir, 'megprep_run_manifest.report_only.json')
+        scratchManifest.setText(manifestJson, 'UTF-8')
+        run_manifest_ch = Channel.value(file(scratchManifest.absolutePath))
+    } else {
+        def logsDirForManifest = new File("${params.preproc_dir}/logs")
+        logsDirForManifest.mkdirs()
+        def publishedManifest = new File(logsDirForManifest, 'megprep_run_manifest.json')
+        publishedManifest.setText(manifestJson, 'UTF-8')
+        run_manifest_ch = Channel.value(file(publishedManifest.absolutePath))
+    }
+
+    // Snapshot Nextflow config(s) into preprocessed/logs (best-effort).
+    // Prefer workflow.configFiles when available so custom `-c /path/to/config` and Docker's
+    // /program/nextflow/run_nextflow.config are captured before the static report is built.
+    // Fallback to launchDir/projectDir conventional names for older Nextflow metadata.
+    try {
+        def logDir = new File("${params.preproc_dir}/logs")
+        if (!logDir.exists() && !logDir.mkdirs()) {
+            log.warn "Could not create preprocessed/logs for nextflow.config snapshot: ${logDir.absolutePath}"
+        } else {
+            def launchDir = new File(workflow.launchDir.toString())
+            def projectDir = new File(workflow.projectDir.toString())
+            def copiedNames = new HashSet()
+            def copiedPairs = new HashSet()
+
+            def copyConfig = { File src, String targetName, boolean overwrite ->
+                if (!src || !src.exists() || !src.isFile()) {
+                    return false
+                }
+                def pairKey = "${src.canonicalPath}->${targetName}"
+                if (copiedPairs.contains(pairKey)) {
+                    copiedNames.add(targetName)
+                    return false
+                }
+                def dst = new File(logDir, targetName)
+                if (!overwrite && dst.exists()) {
+                    copiedNames.add(targetName)
+                    return false
+                }
+                if (src.canonicalPath != dst.canonicalPath) {
+                    dst.bytes = src.bytes
+                }
+                copiedPairs.add(pairKey)
+                copiedNames.add(targetName)
+                log.info "nextflow.config snapshot: ${src.absolutePath} -> ${dst.absolutePath}"
+                return true
+            }
+
+            try {
+                def configFiles = workflow.configFiles
+                if (configFiles) {
+                    def configFileItems = (configFiles instanceof Collection) ? configFiles : (configFiles.getClass().isArray() ? configFiles.toList() : [configFiles])
+                    configFileItems.each { cfgPath ->
+                        def src = new File(cfgPath.toString())
+                        def srcName = src.name
+                        if (srcName in ['nextflow.config', 'run_nextflow.config']) {
+                            copyConfig(src, srcName, true)
+                        } else {
+                            copyConfig(src, srcName, true)
+                            // static_html_report.py looks for run_nextflow.config / nextflow.config.
+                            copyConfig(src, 'run_nextflow.config', true)
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                log.debug "workflow.configFiles is not available in this Nextflow version"
+            }
+
+            [launchDir, projectDir].each { baseDir ->
+                ['nextflow.config', 'run_nextflow.config'].each { name ->
+                    copyConfig(new File(baseDir, name), name, false)
+                }
+            }
+
+            if (copiedNames.isEmpty()) {
+                log.warn(
+                    "nextflow.config snapshot: no nextflow.config or run_nextflow.config found under " +
+                    "workflow.configFiles, launchDir=${launchDir.absolutePath}, or projectDir=${projectDir.absolutePath}. " +
+                    "Static report will fall back to other paths if available."
+                )
+            }
+        }
+    } catch (Exception e) {
+        log.warn "nextflow.config snapshot skipped: ${e.message}"
+    }
+
+    if (cfg.primary == 'report') {
+        generate_static_html_report(Channel.value(true), run_manifest_ch, true)
+    } else {
+
+    if (cfg.runAnatomy) {
         // Anatomy preprocessing workflow.
         if (params.is_bids) {
             println("params.is_bids:${params.is_bids}")
@@ -742,18 +996,9 @@ workflow {
                 .flatten()
                 .set { t1_files_path }
 
-//                 t1_files_path.view()
-
                 t1_nifti_files = t1_files_path.filter { it.endsWith(".nii.gz") }
 
-//                 t1_nifti_files.view { "T1 NIfTI Files: ${it}" }
-
                 t1_files = t1_nifti_files
-
-                // Derive unique anatomical subject identifiers from BIDS T1w files.
-//                 subject_names = t1_nifti_files.map { filePath ->
-//                     filePath.tokenize('/').last().replace(".nii.gz", "")
-//                 }
 
                 subject_names = t1_nifti_files.map { filePath ->
                         def matcher = filePath =~ /sub-\d+/
@@ -768,19 +1013,10 @@ workflow {
 
                     fs_recon = run_freesurfer(t1_files, subject_names, params.fs_subjects_dir)
 
-                    // Generate BEM surfaces from the FreeSurfer reconstruction.
                     fs_anatomy_output = generate_bem(fs_recon.fs_subject_dir,fs_recon.mri_subject_id, params.bem_config, params.fs_subjects_dir)
 
             } else if (params.anatomy_preprocess_method == 'deepprep') {
 
-//                     subject_names = t1_nifti_files.map { filePath ->
-//                         def matcher = filePath =~ /sub-\d+/
-//                         matcher ? matcher[0] : ''
-//                     }
-//                     subject_names = subject_names.unique()
-//                     subject_names.view {" $it "}
-
-                    // Run anatomical preprocessing with DeepPrep.
                     fs_recon = run_deepprep(params.t1_bids_dir, subject_names, params.fs_subjects_dir, params.preproc_dir)
 
                     subject_names = Channel.fromPath("${params.fs_subjects_dir}/*", type: 'dir')
@@ -788,18 +1024,12 @@ workflow {
                                         .map { it.getBaseName() }
                     subject_names.view { name -> println "MRI Subject name: ${name}" }
 
-                    // Build the head surface required by downstream BEM generation.
-//                     subject_names = "sub-01_run-1_T1w" // for debug
-//                     fs_recon_mk = run_mkheadsurf(subject_names,params.fs_subjects_dir,fs_recon.mri_subject_id)
                     fs_recon_mk = run_mkheadsurf(fs_recon.mri_subject_id,params.fs_subjects_dir)
-                    // Generate BEM surfaces from the DeepPrep reconstruction.
                     fs_anatomy_output = generate_bem(fs_recon_mk.fs_subject_dir,fs_recon_mk.mri_subject_id,params.bem_config, params.fs_subjects_dir)
             } else {
                 error "Unsupported anatomy preprocessing method: ${params.anatomy_preprocess_method}. Supported methods are 'freesurfer' and 'deepprep'."
             }
         } else {
-            // Support non-BIDS T1w inputs in DICOM or NIfTI format.
-            // Convert DICOM inputs to NIfTI when needed.
             if (params.t1_input_type == 'dicom') {
                 println "params.t1_dir: ${params.t1_dir}"
                 t1_dicom_dirs = Channel.fromPath("${params.t1_dir}/*/", type: 'dir')
@@ -814,11 +1044,9 @@ workflow {
                 error "Unsupported t1_input_type: ${params.t1_input_type}. Supported types are 'dicom' and 'nifti'."
             }
 
-            // Run anatomical preprocessing.
             subject_names = t1_files.map { it.name.replace(".nii.gz", "") }
             fs_recon = run_freesurfer(t1_files, subject_names, params.fs_subjects_dir)
 
-            // Generate BEM surfaces from the anatomical reconstruction.
             fs_anatomy_output = generate_bem(fs_recon.fs_subject_dir, fs_recon.mri_subject_id, params.bem_config, params.fs_subjects_dir)
 
         }
@@ -826,14 +1054,9 @@ workflow {
     } else {
         fs_subjects_dir = file(params.fs_subjects_dir)
         fs_anatomy_output = new AnatOutput(null,fs_subjects_dir)
-//         fs_anatomy_output = params.fs_subjects_dir
     }
-    
-//     println("Anatomy output: $fs_anatomy_output")
 
-    // MEG preprocessing workflow.
-   if( !params.do_only_anatomy ) {
-        // Discover MEG input files.
+    if ( cfg.runMeg ) {
        raw_files = import_MEG_dataset(params.dataset_dir,params.dataset_format,params.file_suffix)
 
        raw_files.imported_meg_data
@@ -842,53 +1065,63 @@ workflow {
                .filter { it }
                .set {raw_files_path}
 
-       // Apply the configured signal preprocessing recipe.
        preproc_subject_paths = meg_preproc_osl(params.dataset_dir,raw_files_path,params.preproc_dir,params.preproc_config)
 
-      // Detect artifacts automatically.
       preproc_subject_paths_dta = detect_Artifacts(params.preproc_dir,preproc_subject_paths)
 
-       // Fit ICA decomposition.
+       if (cfg.megStage >= 1 && !cfg.skipIca) {
        preproc_subject_paths_ica = run_ICA(params.preproc_dir,
                                         preproc_subject_paths_dta.preproc_subject_paths,
                                         preproc_subject_paths_dta.bad_channels,
                                         preproc_subject_paths_dta.bad_segments)
 
-       // Label artifact-related ICs automatically.
        preproc_subject_paths_ica_label = run_IC_label(params.preproc_dir,
                                             preproc_subject_paths_ica.preproc_subject_paths,
                                             preproc_subject_paths_ica.ica_fif_paths,
                                             preproc_subject_paths_ica.ica_sources,
                                             preproc_subject_paths_ica.ica_expvars)
 
-       // Apply ICA cleanup.
        preproc_subject_paths_clean = apply_ICA(params.preproc_dir,
                                             preproc_subject_paths_ica_label.preproc_subject_paths,
                                             preproc_subject_paths_ica_label.marked_components,
                                             preproc_subject_paths_dta.bad_channels,
                                             preproc_subject_paths_dta.bad_segments)
+       }
 
-        // Create analysis epochs.
         events_files = raw_files_path.collect { raw_subject_path ->
             return raw_subject_path.replaceAll(/_meg\..*/, '_events.tsv')
         }
 
-        // Filter out empty-room or resting-state data before task epoching.
+        if (cfg.megStage >= 2) {
+        if (cfg.skipIca) {
+            if (params.covar_type == 'raw'){
+                preproc_subject_paths
+                    .filter { orig_path_obj ->
+                        def orig_path = orig_path_obj.toString()
+                        !orig_path.contains("task-${params.raw_covariance_task_id}")
+                    }
+                    .set { preproc_subject_raw }
+            } else {
+                preproc_subject_raw = preproc_subject_paths
+            }
+        } else {
         if (params.covar_type == 'raw'){
             preproc_subject_paths_clean.preproc_subject_paths
                     .filter { orig_path_obj ->
                         def orig_path = orig_path_obj.toString()
-                        // // Exclude if it contains task-${params.raw_covariance_task_id}
                         !orig_path.contains("task-${params.raw_covariance_task_id}")
                     }
                     .set { preproc_subject_raw }
         } else {
             preproc_subject_raw = preproc_subject_paths_clean.preproc_subject_paths
         }
+        }
 
         epoch_subject_paths = epochs(params.dataset_dir, params.preproc_dir,preproc_subject_raw,events_files)
+        }
 
-        // Covariance
+        if (cfg.megStage >= 3) {
+
         if (params.covar_type == 'epochs'){
             cov_files = compute_covariances(params.preproc_dir,preproc_subject_paths_clean.preproc_subject_paths)
         } else if (params.covar_type == 'raw'){
@@ -896,14 +1129,13 @@ workflow {
                 .map { orig_path_obj ->
                     def orig_path = orig_path_obj.toString()
 
-                    // Exclude if it already contains task-${params.raw_covariance_task_id}
                     if (orig_path.contains("task-${params.raw_covariance_task_id}"))
                         return null
 
                     def raw_data_file = orig_path.replaceAll(/task-[^_]+/, "task-${params.raw_covariance_task_id}")
                     tuple(orig_path_obj, raw_data_file)
                 }
-                .filter { it != null } // Remove filtered-out items.
+                .filter { it != null }
                 .filter { orig_path_obj, raw_data_file ->
                     new File(raw_data_file).exists()
                 }
@@ -914,81 +1146,54 @@ workflow {
             error "Unsupported covar_type: ${params.covar_type}."
         }
 
-        // MEG-MRI coregistration.
         target_subject_id = preproc_subject_paths_clean.target_mri_subject_id
-    //     target_subject_id.view { "target_subject_id: ${it}" }
         if (fs_anatomy_output?.mri_subject_id) {
             println "fs_anatomy_output.mri_subject_id is set."
-    //         fs_anatomy_output.mri_subject_id.view {"fs_anatomy_output mri_subject_id: ${it} "}
 
             core_inputs = fs_anatomy_output.mri_subject_id.combine(target_subject_id, by: 0)
             core_inputs.view {"coregistration: ${it} "}
 
             trans_subject_paths = coregistration(params.preproc_dir,core_inputs)
 
-            // Wait for epoch and transform results before forward modeling.
             epoch_subject_id = epoch_subject_paths.meg_subject_id
             fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
-            // fwd_inputs.view {"fwd_inputs: ${it} "}
-
-            // Forward solution.
-//             fwds = forward_solution(params.preproc_dir,
-//                             trans_subject_paths,
-//                             params.fs_subjects_dir)
 
             fwds = forward_solution(params.preproc_dir,
                             params.fs_subjects_dir,
                             fwd_inputs)
 
-            // Forward and covariance outputs share the same MEG subject identifier (meg_subject_id).
             cov_subject_id = cov_files.meg_subject_id
             source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
-            //source_inputs.view {"source imaging: ${it} "}
 
-            // Source imaging.
             source_results = source_imaging(params.src_type, params.preproc_dir, source_inputs)
 
-            // Generate the global static HTML report after all MEG outputs are ready.
-            generate_static_html_report(source_results.source_files.collect())
-
-//             if ( params.src_type == 'epochs'){
-//                     source_imaging(params.preproc_dir,fwds.epoch_files,cov_files.bl_cov_files)
-//                 } else if (params.src_type == 'raw') {
-//                     source_imaging(params.preproc_dir,fwds.raw_files,cov_files.bl_cov_files)
-//                 } else {
-//                     error "Unsupported src_type: ${params.src_type}"
-//                 }
+            generate_static_html_report(source_results.source_files.collect(), run_manifest_ch, false)
 
         } else {
                 println "fs_anatomy_output.mri_subject_id is not set."
-                // Coregistration.
                 trans_subject_paths = coregistrations(params.preproc_dir,preproc_subject_raw,fs_anatomy_output.fs_subjects_dir)
 
-                // Forward solution.
-                // Wait for epoch and transform results before forward modeling.
                 epoch_subject_id = epoch_subject_paths.meg_subject_id
                 fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
-                //fwd_inputs.view {"fwd_inputs: ${it} "}
 
                 fwds = forward_solution(params.preproc_dir,
                                 params.fs_subjects_dir,
                                 fwd_inputs)
 
-                // Source imaging.
                 cov_subject_id = cov_files.meg_subject_id
                 source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
-                //source_inputs.view {"source imaging: ${it} "}
 
                 source_results = source_imaging(params.src_type, params.preproc_dir, source_inputs)
 
-                // Generate the global static HTML report after all MEG outputs are ready.
-                generate_static_html_report(source_results.source_files.collect())
+                generate_static_html_report(source_results.source_files.collect(), run_manifest_ch, false)
+        }
+        } else if (cfg.megStage == 2) {
+            generate_static_html_report(epoch_subject_paths.meg_subject_id.collect(), run_manifest_ch, false)
+        } else if (cfg.megStage == 1) {
+            generate_static_html_report(preproc_subject_paths_clean.preproc_subject_paths.collect(), run_manifest_ch, false)
+        } else if (cfg.megStage == 0) {
+            generate_static_html_report(preproc_subject_paths_dta.bad_channels.collect(), run_manifest_ch, false)
         }
     }
-
+    }
 }
-
-
-
-
-

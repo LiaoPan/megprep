@@ -5,7 +5,7 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/cmrlab/megprep)](https://hub.docker.com/r/cmrlab/megprep)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-**MEGPrep** is a fully automated preprocessing pipeline for MEG (Magnetoencephalography) data, built on the **MNE-Python** framework and leveraging the power of **Nextflow**. 
+**MEGPrep** is a fully automated preprocessing pipeline for MEG (Magnetoencephalography) data, built on the **MNE-Python** framework and leveraging the power of **Nextflow**.
 
 It is specifically designed to address the challenges of large-scale MEG data processing with a strong emphasis on reproducibility, efficiency, and user-friendliness in various research environments.
 
@@ -121,6 +121,105 @@ docker pull cmrlab/megprep:<version>
 docker run cmrlab/megprep:<version> [nextflow_options]
 ```
 
+### Pipeline steps
+
+The file [`nextflow/meg_anat_pipeline_for_docker.nf`](nextflow/meg_anat_pipeline_for_docker.nf) is controlled by **`params.steps`** in the config, or by **`--steps`** on the command line. The default in [`nextflow.config`](nextflow/nextflow.config) is **`meg_all`**.
+
+| Primary `steps` | What it does |
+| :--- | :--- |
+| `meg_all` | **Default.** Full MEG processing (import → OSL → artifacts → ICA → epochs → covariance → coregistration → forward → source) using the existing **`fs_subjects_dir`**; does **not** run the T1/FreeSurfer/DeepPrep structural pipeline. |
+| `all` | Run **structural imaging** (T1 import, recon, BEM) **and** the full MEG chain in one go. |
+| `anatomy` | **Structural imaging only** (no MEG). |
+| `meg_artifacts` | MEG up to **artifact detection** (after OSL preprocessing), then the static HTML QC report. |
+| `meg_ica` | Through **ICA** (fit, label, apply), then report. |
+| `meg_epochs` | Through **epoching**, then report. |
+| `report` | Regenerate the **static HTML** report only (scans existing `preproc_dir`; no MEG or MRI processes). |
+
+**Aliases** (same effect as the long name): `meg` → `meg_all`, `artifacts` → `meg_artifacts`, `ica` → `meg_ica`, `epochs` → `meg_epochs`.
+
+**Optional modifiers** (comma-separated, e.g. `--steps 'meg_epochs,skip_ica'`; first token is the mode above):
+
+| Modifier | When it is valid | Effect |
+| :--- | :--- | :--- |
+| `skip_ica` | Only with **`meg_epochs`** | Skips ICA; builds epochs from OSL `*_preproc-raw` files. Not available for `all` / `meg_all` (downstream forward/source expect ICA-clean raw). |
+| `with_anatomy` | `meg_artifacts`, `meg_ica`, or `meg_epochs` (not `meg_all`) | Runs the structural pipeline **before** the selected MEG milestone in the same run. |
+
+**Note:** `do_fs` and `do_only_anatomy` are legacy switches. The Nextflow workflow is now driven by **`steps`**; use `--steps anatomy`, `--steps all`, or `--steps meg_all` instead of editing those legacy flags.
+
+**Examples (local Nextflow):**
+
+```bash
+# Default: full MEG only, use existing FreeSurfer/DeepPrep subjects dir
+nextflow run megprep/nextflow/meg_anat_pipeline_for_docker.nf \
+  -c megprep/nextflow/nextflow.config
+
+# Structural + MEG end-to-end
+nextflow run megprep/nextflow/meg_anat_pipeline_for_docker.nf \
+  -c megprep/nextflow/nextflow.config --steps all
+
+# MRI only
+nextflow run megprep/nextflow/meg_anat_pipeline_for_docker.nf \
+  -c megprep/nextflow/nextflow.config --steps anatomy
+
+# Rebuild static HTML report only
+nextflow run megprep/nextflow/meg_anat_pipeline_for_docker.nf \
+  -c megprep/nextflow/nextflow.config --steps report
+
+# Optional: two-step “anatomy first, then MEG from artifacts”
+nextflow run ... --steps anatomy
+nextflow run ... --steps meg_artifacts -resume
+```
+
+Set `params.steps` in your `nextflow.config` for a project default; override with `--steps` when needed.
+
+### Workflow provenance in the static HTML report
+
+Every run writes `preprocessed/logs/megprep_run_manifest.json`. The static HTML report reads this manifest to draw the dataset-level **Workflow** diagram and to show the run mode, runtime, input data, paths, and only the parameters relevant to the selected stage.
+
+The report also bundles a plain-text config snapshot at `static_html_report/data/nextflow.config.txt` when one can be found. The workflow first snapshots the actual Nextflow config files reported by `workflow.configFiles`; this covers custom local `-c /path/to/config` runs and Docker runs that use `/program/nextflow/run_nextflow.config`. It then falls back to `nextflow.config` / `run_nextflow.config` under the launch directory or project directory.
+
+For `--steps report`, MEGPrep regenerates only the static report. If an earlier `megprep_run_manifest.json` exists, the report build uses it to keep the previous pipeline workflow in the diagram and marks the current run as report-only in the generated report bundle, but it restores the original `preprocessed/logs/megprep_run_manifest.json` afterward so the preprocessing provenance is not overwritten.
+
+### Using pipeline steps with Docker
+
+The image entrypoint is [`nextflow/run_for_docker.sh`](nextflow/run_for_docker.sh) (installed in the container as `/program/nextflow/run.sh`). **Step selection uses the same values** as in the [Pipeline steps](#pipeline-steps) table above.
+
+- **After the image name**, pass **`-s`** / **`--steps`** (forwarded to Nextflow as `--steps`). If you omit it, the workflow uses **`params.steps`** from the config (default in the baked-in image config is **`meg_all`**).
+- **Modifiers** that contain commas must be **quoted for the shell**, e.g. `--steps 'meg_epochs,skip_ica'`.
+- You can instead set **`steps = '...'`** inside the Nextflow file you mount at **`/program/nextflow/nextflow.config`**; a container **`--steps`** / **`-s`** argument **overrides** that for the run.
+- **`-s`** here is the **MEGPrep** flag (input path is **`-i`**), not Docker’s **`-i`** (interactive). Typical pattern: `docker run ... cmrlab/megprep:<tag> -i /input -o /output ... --steps all`.
+- The Docker entrypoint copies the mounted config to `/program/nextflow/run_nextflow.config`, applies command-line path overrides, runs Nextflow with that file, then copies it to `<output>/nextflow.config` and snapshots it into `preprocessed/logs/` for the static HTML report.
+- Historical `--anat_only` and `--meg_only` still work as container helper shortcuts when `--steps` is not provided; they map to `--steps anatomy` and `--steps meg_all`, respectively. Prefer `--steps` for new runs.
+
+**Examples:**
+
+```bash
+# Full MEG only (explicit; same as default meg_all when config unchanged)
+docker run -it --rm \
+  -v /data/bids:/input -v /data/out:/output -v /data/smri:/smri \
+  -v /data/license.txt:/fs_license.txt \
+  cmrlab/megprep:0.0.3 \
+  -i /input -o /output \
+  --fs_license_file /fs_license.txt --fs_subjects_dir /smri \
+  --steps meg_all
+
+# Structural MRI + full MEG in one container run
+docker run -it --rm \
+  -v /data/bids:/input -v /data/out:/output -v /data/smri:/smri \
+  -v /data/license.txt:/fs_license.txt \
+  cmrlab/megprep:0.0.3 \
+  -i /input -o /output \
+  --fs_license_file /fs_license.txt --fs_subjects_dir /smri \
+  --steps all
+
+# Static HTML report only (existing preproc under preproc_dir)
+docker run -it --rm \
+  -v /data/bids:/input -v /data/out:/output -v /data/smri:/smri \
+  cmrlab/megprep:0.0.3 \
+  -i /input -o /output --fs_subjects_dir /smri \
+  --steps report
+```
+
 ### Main Options
 
 | Option | Description |
@@ -128,13 +227,14 @@ docker run cmrlab/megprep:<version> [nextflow_options]
 | `-c`, `--config` | Specify the Nextflow config file (default: `nextflow.config`) |
 | `-i`, `--input` | Specify the input directory |
 | `-o`, `--output` | Specify the output directory (including report results) |
+| `-s`, `--steps` | **Nextflow (`meg_anat_pipeline_for_docker.nf`):** sets `params.steps` (e.g. `all`, `meg_all`, `anatomy`, `report`). With **Docker**, pass this **after the image name**; see [Using pipeline steps with Docker](#using-pipeline-steps-with-docker). Same semantics as [Pipeline steps](#pipeline-steps). |
 | `-r`, `--view-report` | Run Streamlit to view the report (does not run Nextflow) |
 | `--fs_license_file` | Specify the FreeSurfer license file path |
 | `--fs_subjects_dir` | Specify the FreeSurfer `SUBJECTS_DIR` containing processed T1 results |
 | `--t1_dir` | Specify the T1 image directory |
 | `--t1_input_type` | Specify the T1 input type |
-| `--anat_only` | Run only the FreeSurfer/Anatomy related steps |
-| `--meg_only` | Run only the MEG related steps |
+| `--anat_only` | **Container helper:** deprecated shortcut for `--steps anatomy` when `--steps` is not provided. |
+| `--meg_only` | **Container helper:** deprecated shortcut for `--steps meg_all` when `--steps` is not provided. |
 | `--resume` | Resume the previous run (Nextflow option) |
 
 ### Example: Running a Full Pipeline
@@ -155,6 +255,8 @@ docker run -it --rm \
     --resume
 ```
 
+For MEGPrep, the default **`steps`** is **`meg_all`** (MEG only, using existing `fs_subjects_dir`). To run **structural MRI + full MEG** together, use **`--steps all`** (or **`-s all`**) on the **`docker run ...`** command line, or set **`steps = 'all'`** in the mounted config. See [Using pipeline steps with Docker](#using-pipeline-steps-with-docker).
+
 ---
 
 ## 📈 Quality Control Reports
@@ -168,7 +270,7 @@ Use the `-r` flag and map port `8501`:
 docker run -p 8501:8501 -v /data/liaopan/datasets/SMN4Lang/g:/output cmrlab/megprep:<version> -r
 ```
 
-**Access via browser:**  
+**Access via browser:**
 👉 `http://<server_ip>:8501` (or `http://localhost:8501` if running locally)
 
 ---
@@ -230,12 +332,12 @@ We welcome contributions to MEGPrep! If you want to contribute code or improve d
 
 3.  **Build Docker Image Locally (Optional):**
     If you modified the Dockerfile or dependencies, you can build the image manually using Docker or the provided helper script.
-    
+
     **Using the build script (Recommended):**
     ```bash
     bash build_megprep.sh
     ```
-    
+
     **Using Docker directly:**
     ```bash
     docker build -t megprep:local -f megprep.Dockerfile .

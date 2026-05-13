@@ -25,6 +25,14 @@ from typing import Any
 import mne
 import pandas as pd
 
+from workflow_diagram import (
+    expect_coregistration_outputs_for_qc,
+    expect_ica_outputs_for_qc,
+    load_workflow_context,
+    qc_completeness_scope_from_manifest,
+    render_workflow_dataset_html,
+    workflow_meta_for_json,
+)
 
 DEFAULT_THRESHOLDS = {
     "bad_channel_threshold": 30,
@@ -310,6 +318,375 @@ a:hover {
 .section h2 {
   margin: 0 0 14px;
   font-size: 1.25rem;
+}
+
+.workflow-section {
+  margin: 26px 0 44px;
+}
+
+.workflow-svg-wrap {
+  overflow-x: auto;
+  margin: 12px 0 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fbfdff, #f6f8fc);
+  border: 1px solid rgba(66, 103, 213, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.workflow-section h2 {
+  margin: 0 0 6px;
+  font-size: 1.32rem;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+.workflow-subtitle {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.94rem;
+  line-height: 1.45;
+}
+
+.workflow-panel {
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(250, 252, 255, 0.98));
+  border: 1px solid rgba(66, 103, 213, 0.14);
+  box-shadow: var(--shadow);
+}
+
+.panel.workflow-panel {
+  padding: 18px 20px 20px;
+}
+
+.workflow-footnote {
+  margin: 0 0 10px !important;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(66, 103, 213, 0.06);
+  border: 1px solid rgba(66, 103, 213, 0.10);
+}
+
+.workflow-manifest-hint,
+.workflow-details-hint {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.workflow-manifest-hint {
+  margin-top: 0;
+}
+
+.workflow-config-hint {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.workflow-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.workflow-link-row .workflow-manifest-hint,
+.workflow-link-row .workflow-config-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid rgba(66, 103, 213, 0.12);
+}
+
+.workflow-link-row .workflow-config-hint-missing {
+  flex: 1 1 100%;
+  align-items: flex-start;
+  border-radius: 12px;
+}
+
+.workflow-details-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.workflow-detail-group {
+  min-width: 0;
+  padding: 14px 16px 13px;
+  border: 1px solid rgba(49, 51, 63, 0.10);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.workflow-detail-group-paths {
+  grid-column: 1 / -1;
+}
+
+.workflow-detail-title {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.workflow-detail-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+}
+
+.workflow-detail-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.32fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.workflow-detail-group-paths .workflow-detail-row {
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+}
+
+.workflow-detail-row dt,
+.workflow-detail-row dd {
+  margin: 0;
+}
+
+.wf-detail-k {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.wf-detail-v {
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.workflow-detail-group-paths .wf-detail-v {
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.wf-detail-path-value {
+  color: #1d2939;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-weight: 600;
+}
+
+.wf-arrowhead {
+  fill: rgba(66, 103, 213, 0.38);
+}
+
+.workflow-svg {
+  min-width: 720px;
+  max-width: none;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.wf-lane-bg {
+  fill: rgba(255, 255, 255, 0.62);
+  stroke: rgba(66, 103, 213, 0.10);
+  stroke-width: 1;
+}
+
+.wf-lane-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  fill: #667085;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.wf-node-card {
+  fill: #ffffff;
+  stroke: rgba(49, 51, 63, 0.12);
+  stroke-width: 1;
+  filter: drop-shadow(0 7px 14px rgba(15, 23, 42, 0.08));
+}
+
+.wf-node-card.wf-done {
+  fill: #ffffff;
+  stroke: rgba(6, 118, 71, 0.20);
+}
+
+.wf-node-card.wf-partial {
+  fill: #ffffff;
+  stroke: rgba(181, 71, 8, 0.20);
+}
+
+.wf-node-card.wf-missing {
+  fill: #ffffff;
+  stroke: rgba(196, 50, 10, 0.22);
+}
+
+.wf-node-card.wf-skipped,
+.wf-node-card.wf-na {
+  fill: #ffffff;
+  stroke: rgba(102, 112, 133, 0.18);
+}
+
+.wf-status-rail.wf-done {
+  fill: var(--good);
+}
+
+.wf-status-rail.wf-partial {
+  fill: var(--warn);
+}
+
+.wf-status-rail.wf-missing {
+  fill: var(--danger);
+}
+
+.wf-status-rail.wf-skipped,
+.wf-status-rail.wf-na {
+  fill: #98a2b3;
+}
+
+.wf-node-pill.wf-done {
+  fill: var(--good-soft);
+}
+
+.wf-node-pill.wf-partial {
+  fill: var(--warn-soft);
+}
+
+.wf-node-pill.wf-missing {
+  fill: var(--danger-soft);
+}
+
+.wf-node-pill.wf-skipped,
+.wf-node-pill.wf-na {
+  fill: #eef2f6;
+}
+
+.wf-text {
+  font-size: 12.5px;
+  font-weight: 700;
+  fill: var(--text);
+  font-family: "Source Sans Pro", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.wf-node-status {
+  font-size: 10.5px;
+  font-weight: 800;
+  fill: #344054;
+  font-family: "Source Sans Pro", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.wf-node-status.wf-done {
+  fill: var(--good);
+}
+
+.wf-node-status.wf-partial {
+  fill: var(--warn);
+}
+
+.wf-node-status.wf-missing {
+  fill: var(--danger);
+}
+
+.wf-edge {
+  fill: none;
+  stroke: rgba(66, 103, 213, 0.26);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.wf-edge-branch {
+  stroke-dasharray: 4 4;
+  stroke: rgba(102, 112, 133, 0.28);
+}
+
+/* Legacy fallback for older rectangular workflow SVG nodes. */
+.wf-box.wf-done {
+  fill: #f0f7ff;
+  stroke: rgba(37, 99, 235, 0.35);
+}
+
+.wf-box.wf-partial {
+  fill: #fffbeb;
+  stroke: rgba(217, 119, 6, 0.35);
+}
+
+.wf-box.wf-missing {
+  fill: #fef2f2;
+  stroke: rgba(220, 38, 38, 0.32);
+}
+
+.wf-box.wf-skipped {
+  fill: #f9fafb;
+  stroke: rgba(107, 114, 128, 0.3);
+  stroke-dasharray: 3 2;
+}
+
+.wf-box.wf-na {
+  fill: #f9fafb;
+  stroke: rgba(156, 163, 175, 0.28);
+}
+
+.workflow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.76rem;
+  align-items: center;
+}
+
+.wf-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(49, 51, 63, 0.1);
+  background: #ffffff;
+  color: #31333f;
+}
+
+.wf-legend::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #98a2b3;
+}
+
+.wf-legend.wf-done { background: var(--good-soft); border-color: rgba(6, 118, 71, 0.16); color: var(--good); }
+.wf-legend.wf-partial { background: var(--warn-soft); border-color: rgba(181, 71, 8, 0.18); color: var(--warn); }
+.wf-legend.wf-missing { background: var(--danger-soft); border-color: rgba(196, 50, 10, 0.18); color: var(--danger); }
+.wf-legend.wf-skipped { background: #f2f4f7; border-color: rgba(102, 112, 133, 0.18); color: #475467; }
+.wf-legend.wf-na { background: #f8fafc; border-color: rgba(102, 112, 133, 0.14); color: #667085; }
+
+.wf-legend.wf-done::before { background: var(--good); }
+.wf-legend.wf-partial::before { background: var(--warn); }
+.wf-legend.wf-missing::before { background: var(--danger); }
+
+.workflow-section + .grid.cards {
+  margin-top: 4px;
 }
 
 .panel {
@@ -1193,6 +1570,25 @@ tr.row-fail:hover td.active-sort-cell {
   .filter-panel {
     padding: 14px;
   }
+
+  .panel.workflow-panel {
+    padding: 14px;
+  }
+
+  .workflow-svg-wrap {
+    padding: 10px;
+  }
+
+  .workflow-detail-group,
+  .workflow-detail-group-paths {
+    grid-column: 1 / -1;
+  }
+
+  .workflow-detail-row,
+  .workflow-detail-group-paths .workflow-detail-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
 }
 """
 
@@ -1849,6 +2245,39 @@ def resolve_report_dirs(report_root: Path) -> tuple[Path, Path]:
     raise ValueError(message)
 
 
+def _nextflow_config_source_for_bundle(
+    report_root: Path, preprocessed_dir: Path, manifest: dict[str, Any] | None
+) -> tuple[Path | None, str | None]:
+    """Pick nextflow.config (or run_nextflow.config) to embed as static_html data/nextflow.config.txt.
+
+    The .txt suffix forces browsers to treat the bundle as plain text (Nextflow configs often start
+    with '//' which triggers XML parse errors when the path ends in .config).
+
+    Priority: preprocessed/logs (pipeline snapshot), then dataset report root, then manifest launch_dir.
+    Run-details table omits covariance/source params unless manifest meg_stage >= 3.
+    """
+    logs_dir = preprocessed_dir / "logs"
+    for name in ("nextflow.config", "run_nextflow.config"):
+        candidate = logs_dir / name
+        if candidate.is_file():
+            return candidate, f"{name} (preprocessed/logs, pipeline snapshot)"
+    for name in ("nextflow.config", "run_nextflow.config"):
+        candidate = report_root / name
+        if candidate.is_file():
+            return candidate, f"{name} (dataset / report root)"
+    if isinstance(manifest, dict):
+        wf = manifest.get("workflow_meta")
+        if isinstance(wf, dict):
+            ld = wf.get("launch_dir") or wf.get("launchDir")
+            if ld:
+                base = Path(str(ld))
+                for name in ("nextflow.config", "run_nextflow.config"):
+                    candidate = base / name
+                    if candidate.is_file():
+                        return candidate, f"{name} (manifest launch_dir)"
+    return None, None
+
+
 def read_raw_info(raw_file: Path) -> dict[str, Any]:
     try:
         raw = mne.io.read_raw_fif(raw_file, preload=False, verbose="ERROR")
@@ -2018,6 +2447,8 @@ def collect_subject_data(
     report_root: Path,
     output_root: Path,
     thresholds: dict[str, float],
+    *,
+    qc_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     preprocessed_dir = report_root / "preprocessed"
     subject_slug = sanitize_name(subject)
@@ -2041,6 +2472,7 @@ def collect_subject_data(
         "steps": {},
         "alarms": [],
         "thresholds": thresholds,
+        "preproc_done": bool(raw_files),
     }
 
     # Artifacts
@@ -2264,6 +2696,7 @@ def collect_subject_data(
     summary["steps"]["source"] = source_data["exists"]
 
     alarms: list[dict[str, str]] = []
+    scope = qc_scope if qc_scope is not None else qc_completeness_scope_from_manifest(None)
 
     if not artifact_data["exists"]:
         alarms.append({"category": "Completeness", "severity": "warn", "message": "Artifact outputs are missing."})
@@ -2291,9 +2724,9 @@ def collect_subject_data(
                 }
             )
 
-    if not ica_data["exists"]:
+    if expect_ica_outputs_for_qc(scope) and not ica_data["exists"]:
         alarms.append({"category": "Completeness", "severity": "warn", "message": "ICA outputs are missing."})
-    else:
+    elif ica_data["exists"]:
         if not ica_data["has_ecg"]:
             alarms.append({"category": "ICA", "severity": "warn", "message": "No ECG-related components detected."})
         elif ica_data["marked_count"] == 0:
@@ -2316,9 +2749,9 @@ def collect_subject_data(
                 }
             )
 
-    if not coreg_data["exists"]:
+    if expect_coregistration_outputs_for_qc(scope) and not coreg_data["exists"]:
         alarms.append({"category": "Completeness", "severity": "warn", "message": "Coregistration outputs are missing."})
-    else:
+    elif coreg_data["exists"]:
         if coreg_data["dist_mean"] is not None and float(coreg_data["dist_mean"]) > thresholds["coreg_mean_threshold"]:
             alarms.append(
                 {
@@ -2380,6 +2813,9 @@ def build_dataset_summary(
     output_root: Path,
     subject_summaries: list[dict[str, Any]],
     thresholds: dict[str, float],
+    *,
+    workflow_html: str = "",
+    workflow_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     step_names = [key for key, _ in STEP_DEFS]
     total_subjects = len(subject_summaries)
@@ -2413,6 +2849,8 @@ def build_dataset_summary(
         "step_completion": {
             step: sum(1 for item in subject_summaries if item["steps"].get(step)) for step in step_names
         },
+        "workflow_html": workflow_html,
+        "workflow_meta": workflow_meta or {},
         "subjects": [
             {
                 "subject": item["subject"],
@@ -3158,6 +3596,7 @@ def build_index_html(dataset_summary: dict[str, Any], subject_summaries: list[di
         <a href="alarms.html">Alarm board</a>
       </div>
     </div>
+{dataset_summary.get("workflow_html") or ""}
 
     <div class="grid cards">
       <div class="card">
@@ -3428,10 +3867,35 @@ def generate_static_report(args: argparse.Namespace) -> Path:
             f"No subjects were discovered under preprocessed directory: {preprocessed_dir}. "
             "Please verify that the MEGPrep outputs have been generated."
         )
+    wf_ctx = load_workflow_context(report_root, preprocessed_dir)
+    qc_scope = qc_completeness_scope_from_manifest(wf_ctx.get("manifest"))
     subject_summaries = [
-        collect_subject_data(subject, report_root, output_root, thresholds) for subject in subjects
+        collect_subject_data(subject, report_root, output_root, thresholds, qc_scope=qc_scope)
+        for subject in subjects
     ]
-    dataset_summary = build_dataset_summary(report_root, output_root, subject_summaries, thresholds)
+    ensure_dir(output_root / "data")
+    manifest_src = preprocessed_dir / "logs" / "megprep_run_manifest.json"
+    if manifest_src.is_file():
+        shutil.copy2(manifest_src, output_root / "data" / "megprep_run_manifest.json")
+    cfg_dst = output_root / "data" / "nextflow.config.txt"
+    wf_ctx["nextflow_config_bundled"] = False
+    wf_ctx["nextflow_config_source_name"] = None
+    mfest = wf_ctx.get("manifest") if isinstance(wf_ctx.get("manifest"), dict) else None
+    cfg_src, cfg_src_desc = _nextflow_config_source_for_bundle(report_root, preprocessed_dir, mfest)
+    if cfg_src is not None:
+        shutil.copy2(cfg_src, cfg_dst)
+        wf_ctx["nextflow_config_bundled"] = True
+        wf_ctx["nextflow_config_source_name"] = cfg_src_desc
+    workflow_html = render_workflow_dataset_html(wf_ctx, subject_summaries)
+    wf_meta = workflow_meta_for_json(wf_ctx)
+    dataset_summary = build_dataset_summary(
+        report_root,
+        output_root,
+        subject_summaries,
+        thresholds,
+        workflow_html=workflow_html,
+        workflow_meta=wf_meta,
+    )
 
     for summary in subject_summaries:
         build_subject_html(summary, output_root)
