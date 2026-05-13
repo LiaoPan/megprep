@@ -27,6 +27,8 @@ softwares/tktools
 megprep/temp/
 megprep/tools/DeepPrep
 megprep/tools/MEGNet
+megprep/reports/__pycache__/
+megprep/__pycache__
 run_*.sh
 start_vpn.sh
 license.txt
