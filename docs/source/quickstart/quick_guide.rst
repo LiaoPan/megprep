@@ -1,363 +1,168 @@
-Guide for Beginner
-=============
+Quickstart
+==========
 
-Pipeline Parameters
-^^^^^^^^^^^^^^^^^^^^^^^^
+This page is for a first successful MEGPrep run. You do not need to understand
+all configuration fields before starting. For a new dataset, the safest first
+run is usually through ICA cleaning and QC:
 
-In the nextflow.config file, you can configure various pipeline parameters to customize your processing workflow:
+.. code-block:: text
 
-**nextflow.config**
+   MEG data -> preprocessing -> artifact detection -> ICA cleaning -> QC report
 
-.. code-block:: groovy
+The later stages, especially epochs, covariance, coregistration, and source
+reconstruction, are more dataset-specific. They often need event definitions,
+noise-covariance choices, and anatomy matching to be checked before a full
+source-level run. See :doc:`Full Workflow <../tutorial/full_workflow>` when you
+are ready for those stages.
 
-    params {
-    dataset_dir = "/input" // Input data directory
-    output_dir = "/output" // Output logs directory
-    preproc_dir = "${params.output_dir}/preprocessed" // Output results directory
-    code_dir = "/program/megprep" // All code for preprocessing
-    do_fs = true // Enable FreeSurfer method
-    do_only_anatomy = false // if true, only anatomy preprocessing.
-    is_bids = true // Whether the data is in BIDS format
-    meg_visualize = true // for coregistration and source_recon
+Before You Start
+----------------
 
-    // MRI Parameters
-    anatomy_preprocess_method = "freesurfer" // "freesurfer" or "deepprep"
-    anatomy_select_tag = "" //"_run-02_T1w" // defalut:"", <subject_id>+<anatomy_tag> to select multiple runs T1.
+Prepare two required paths on your computer. You may also need an anatomy path
+later for source-level analysis:
 
-    // MRI Import datasets
-    mri_import_config = """
-        # Filter out specific anatomy, only bids support.
-        subject_id: '001' # str or null
-        session_id: null # str or null
-        task: null
-        run_id: null
-    """
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
 
-    //freesurfer method
-    t1_dir = "/input"               // T1 image directory
-    t1_input_type = "nifti"         // 'dicom' or 'nifti'
+   * - Path
+     - What it contains
+   * - ``/path/to/bids_or_raw_meg``
+     - Your MEG dataset. BIDS is recommended, but raw FIF discovery is also
+       supported by the default config.
+   * - ``/path/to/output``
+     - An empty or reusable output directory for MEGPrep results.
+   * - ``/path/to/smri``
+     - Optional for the first run. FreeSurfer or DeepPrep anatomy outputs are
+       required later for coregistration and source reconstruction.
 
-    //deepprep method
-    deepprep_device = "cpu"
-    t1_bids_dir = "/input"
-    fs_license = "/data/liaopan/megprep/megprep/tools/DeepPrep/license.txt"
+If you do not already have anatomy outputs, start with the preprocessing check
+below. Run anatomy or source reconstruction after you confirm how T1 images
+should be selected for your dataset.
 
-    //[fixed params]
-    fs_subjects_dir = "/smri" // FREESURFER SUBJECTS_DIR in Container[fixed]
-    freesurfer_home = "/opt/freesurfer/7.4.1-1"
+Run One Command
+---------------
 
-
-    // MEG import datasets parameters
-    dataset_format = 'auto'           // Dataset format: 'auto', 'bids', or 'raw'
-    file_suffix = '.fif'              // File suffix for raw datasets
-    meg_import_config = """
-        # Filter out specific megs, only bids support.
-        subject_id: null # str or null
-        session_id: null # str or null
-        task: null
-        run_id: null
-        #subject_id:
-        #    - '001'
-        #session_id:
-        #    - '006'
-        #task:
-        #    - compr
-    """
-
-    // BEM model parameters
-    bem_config = """
-        ico: 4
-        conductivity:
-            - 0.3
-    """
-    // MEG Preprocessing Parameters
-    osl_random_seed = 2025
-    preproc_config = """
-        preproc:
-        #- set_channel_types:  {EEG061: eog, EEG062: eog, EEG063: ecg}
-        - filter: {l_freq: 0.5, h_freq: 40, method: iir, iir_params: {order: 5, ftype: butter}}
-        - notch_filter: {freqs: 50 100}
-        - resample: {sfreq: 100}
-        #- bad_segments: {segment_len: 500, picks: mag, significance_level: 0.1}
-        #- bad_segments: {segment_len: 500, picks: mag, mode: diff, significance_level: 0.1}
-    """
-
-
-    // MEG Artifacts Detection Parameters
-    artifact_config = """
-        find_bad_channels:
-            pyprep:
-                deviation:
-                    deviation_threshold: 5.0
-                snr: {}
-                nan_flat: {}
-                # hfnoise:
-                #     HF_zscore_threshold: 5.0
-              # ransac: # very slow
-                #     n_samples: 50
-                #     sample_prop: 0.25
-                #     corr_thresh: 0.75
-                #     frac_bad: 0.4
-                #     corr_window_secs: 5.0
-                #     channel_wise: true
-                #     max_chunk_size: null
-                # correlation:
-                #     correlation_secs: 1.0
-                #     correlation_threshold: 0.4
-                #     frac_bad: 0.01
-            psd:
-                std_multiplier: 6
-            osl:
-                ref_meg: auto
-                significance_level: 0.05
-            mne:
-                find_bad_channels_lof:
-                    n_neighbors: 20
-                    picks: mag
-                    metric: euclidean
-                    threshold: 1.5
-
-        find_bad_segments:
-            osl:
-                segment_len: 1000 # detect_badsegments
-            mne:
-                annotate_muscle_zscore:
-                    ch_type: mag
-                    threshold: 12
-                #annotate_amplitude:
-                #    picks: meg
-                # annotate_break:
-                #     min_break_duration: 15.0
-                #     t_start_after_previous: 5.0
-                #     t_stop_before_next: 5.0
-    """
-
-
-    // MEG ICA Parameters
-    num_IC = 60 // 0.99999
-    ICA_random_seed = 2025
-    ICA_output_dir = "ica_report" // relative path based on preproc dir
-
-    // MEG ICA Label Parameters
-    ic_label_config = """
-        # detect artifact ICs
-        ic_ecg: true
-        ic_eog: true
-        ic_outlier: true # detect artifact ICs by rules.
-
-        find_bads_eog:
-            ch_name: null # or the ch_name of EOG.
-            threshold: auto
-            l_freq: 1
-            h_freq: 10
-            start: null
-            stop: null
-            measure: zscore
-
-        find_bads_ecg:
-            ch_name: null # or the ch_name of ECG.
-            threshold: auto
-            method: ctps
-            l_freq: 8
-            h_freq: 16
-            measure: zscore
-
-        find_bads_muscle:
-            threshold: 0.5
-            start: null
-            stop: null
-            l_freq: 7
-            h_freq: 45
-
-        ICA_classify:
-            meg_vendor: ctf # neuromag or ctf or quanmag_opm or quspin_opm
-            explained_var:
-                threshold: 0.1
-                ch_type: mag
-            find_ecg_ics:
-                time_segment: 10 # seconds
-                ts_ecg_num_max: 20 # Maximum number of heartbeats expected in the chosen time segment
-                l_freq: 0.1
-                h_freq: 10
-                peak_threshod_coef: 0.4 #Indicates the threshold of the number of ecg signal peak interval (unit: index). (peak_threshod = 0.4 * fs) | # for 1 seconds
-                peak_std_threshold_coef: 0.05 #Standard deviation threshold of ecg signal peak interval (unit: index). (peak_std_threshold = peak_std_threshold_coef * fs) | # for 1 seconds
-            find_abnormal_psd_ics:
-                attention_low_freq: 0
-                attention_high_freq: 150
-                le_low_freq: 0
-                le_high_freq: 12
-                low_freq_energy_threshold: 0.8 # Threshold above which the component is flagged by low-frequency energy ratio
-    """
-
-    // MEG Epochs Parameters
-    epoch_output_dir = "epochs" // relative path based on preproc dir
-    epoch_config = """
-    task_type: 'task'   # or 'resting'
-
-    resting:
-        fixed_length_duration: 2.0
-
-    event_source: 'find_events'  # 'event_file' or 'find_events'
-
-    autoreject: false  # true or false| automatic global_rejection_threshold, get the `reject` params.
-
-    #event_file：specific the event type of *_events.tsv | filter | the value of `null` means to get all events.
-    event_file:
-        trial_type: null
-        #type: # you can change `trial_type` to `type` or other type related.
-        #    word_onset_01: 1
-        #    phoneme_onset_01: 2
-        # trial_type:
-        #    - word_onset_01
-        #    - phoneme_onset_01
-
-    # find events
-    find_events:
-        #stim_channel: UPPT001 # for CTF Holmes
-        stim_channel: null
-        shortest_event: 1
-        min_duration: 0.0
-    epochs:
-        event_id: null
-        tmin: -0.2
-        tmax: 1
-        reject_by_annotation: true
-        picks: meg
-        baseline: null
-        #reject:
-            #grad: 4000e-13
-            #mag: 4e-12
-        preload: true
-        detrend: null
-    """
-
-
-    // MEG-MRI coregistraion Parameters
-    trans_output_dir = "trans"
-    core_config = """
-    omit_head_shape_points: 1 # mm
-    grow_hair: 0.0 #mm
-    icp:
-        n_iterations: 200
-        lpa_weight: 1.0
-        nasion_weight: 10.0
-        rpa_weight: 1.0
-        hsp_weight: 10.0
-        eeg_weight: 0.0
-        hpi_weight: 1.0
-    finetune_icp:
-        n_iterations: 200
-        lpa_weight: 0.0
-        nasion_weight: 0.0
-        rpa_weight: 0.0
-        hsp_weight: 10.0
-        eeg_weight: 0.0
-        hpi_weight: 0.0
-    """
-
-    // Covariance Parameters
-    covar_output_dir = "covariance"
-    covar_visualize = true // Whether to generate covariance graphs
-    covar_type = "epochs" // raw or epochs
-    raw_covariance_task_id = "resting" // task name
-    covar_config = """
-        ## 1.Estimate noise covariance matrix from a continuous segment of raw data.
-        compute_raw_covariance:
-            tmin: 0
-            tmax: null
-            method: auto
-            reject:
-                grad: 4000e-13  # T / m (gradiometers)
-                mag: 4e-12  # T (magnetometers)
-            reject_by_annotation: true
-            rank: info
-
-        ## 2.Estimate noise covariance matrix from epochs.
-        # find events
-        events:
-            stim_channel: null
-            #stim_channel: UPPT001 # for CTF Holmes
-            shortest_event: 1
-            min_duration: 0.0
-
-        # For baseline epochs
-        epochs:
-            event_id: null # baseline event id
-            tmin: -0.2 # Start time (in seconds) for covariance calculation window
-            tmax: 0.0 # End time (in seconds) for covariance calculation window
-            picks: meg
-            baseline: null
-            #reject:
-                #grad: 4000e-13
-                #mag: 4e-12
-            preload: true
-            detrend: null
-            reject_by_annotation: true
-
-        covariance:
-            tmin: null  #Start time for baseline. If null start at first sample.
-            tmax: null  # End time for baseline. If null end at last sample.
-            rank: null  # Rank used for covariance calculation| meg: 90
-    """
-
-
-    // Forward Solution Parameters
-    fwd_output_dir = "forward_solution"
-    fwd_epoch_label = "wdonset"
-    fwd_config = """
-        surface: white # pial
-        spacing: ico4
-    """
-
-    // Source Imaging Parameters
-    src_output_dir = "source_recon"
-    src_type = "epochs" // raw or epochs
-    src_config = """
-        source_methods:
-            - dSPM
-
-        data_type: meg  # mag
-        spacing: ico4
-        epoch_label: wdonset
-
-        dSPM:
-            inverse_operator:
-                loose: auto
-                depth: 0.8
-                fixed: auto
-                rank: info
-                    #meg : 50
-            apply_inverse:
-                lambda2: 0.1111111111
-                method: dSPM
-                pick_ori: normal
-
-        LCMV:
-            n_rank: 50  # compute_covariance,meg's n_rank
-            cov_tmin: 0.01
-            cov_tmax: 0.4
-            make_lcmv:
-                reg: 0.05
-                pick_ori: null
-                rank:
-                    meg : 50
-                weight_norm: unit-noise-gain-invariant
-"""
-
-Run MEGPrep
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Replace only the paths in this command. This first run stops after ICA
+cleaning, which avoids dataset-specific event and source-model assumptions:
 
 .. code-block:: bash
 
-    docker run -it --rm \
-        -v /data/datasets/SMN4Lang:/input \
-        -v /data/datasets/SMN4Lang/preprocessed:/output \
-        -v /data/datasets/SMN4Lang/smri:/smri \
-        -v /data/megprep/license.txt:/fs_license.txt \
-        -v /data/megprep/nextflow/nextflow.config:/program/nextflow/nextflow.config \
-        megprep:0.0.3 \
-        -i /input \
-        -o /output \
-        --fs_license_file /license.txt \
-        --fs_subjects_dir /smri \
-        --resume
+   docker run -it --rm \
+     -v /path/to/bids_or_raw_meg:/input \
+     -v /path/to/output:/output \
+     cmrlab/megprep:0.0.3 \
+     -i /input \
+     -o /output \
+     --steps meg_ica \
+     --resume
+
+This run imports your MEG files, applies the default continuous preprocessing,
+detects bad channels and bad segments, fits and labels ICA, applies ICA, and
+generates the static QC report. The Docker paths after the colon are fixed
+container paths; normally you only edit the host paths before the colon.
+
+Check the Results
+-----------------
+
+When the run finishes, open:
+
+.. code-block:: text
+
+   /path/to/output/static_html_report/index.html
+
+Start with the dataset dashboard. Sort the table by alarms, bad channels, bad
+segments, ICA components, missing steps, or, for full runs, coregistration
+distance and epoch rejection rate. Click a subject to review its detailed page.
+
+The most useful output locations are:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 38 62
+
+   * - Path
+     - Meaning
+   * - ``output/preprocessed/``
+     - Processed data, artifact files, ICA outputs, and any later-stage outputs
+       produced by the selected ``--steps`` mode.
+   * - ``output/static_html_report/index.html``
+     - Main quality-control report.
+   * - ``output/report.html``
+     - Nextflow execution report.
+   * - ``output/timeline.html``
+     - Nextflow runtime timeline.
+
+What Do I Need to Change?
+-------------------------
+
+For the first ``meg_ica`` run, often nothing beyond paths and ``--steps``.
+Change the config when one of these applies:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - Situation
+     - What to change
+   * - You want only a subset of subjects, sessions, tasks, or runs.
+     - Edit ``meg_import_config`` in ``nextflow.config``.
+   * - Your data are resting-state and you only need fixed-length epochs.
+     - Before running ``meg_epochs`` or ``meg_all``, edit
+       ``epoch_config.task_type`` and ``resting.fixed_length_duration``.
+   * - Your task events come from a specific trigger channel or BIDS
+       ``events.tsv`` labels.
+     - Before running ``meg_epochs`` or ``meg_all``, edit
+       ``epoch_config.find_events`` or ``epoch_config.event_file``.
+   * - Your line noise frequency is not 50 Hz.
+     - Edit ``preproc_config.notch_filter``.
+   * - You need a different sampling rate.
+     - Edit ``preproc_config.resample.sfreq``.
+   * - You have empty-room or noise recordings for covariance.
+     - Set ``covar_type = "raw"`` and ``raw_covariance_task_id``.
+   * - You only want to rebuild the report.
+     - Run with ``--steps report``.
+
+Minimal Config Override
+-----------------------
+
+Most users should start from the default config. If you only want to select a
+task from a BIDS dataset, mount a small project config that changes the import
+filter:
+
+.. code-block:: groovy
+
+   params {
+       meg_import_config = """
+       subject_id: null
+       session_id: null
+       task:
+         - rest
+       run_id: null
+       """
+   }
+
+Then run the first QC pass with:
+
+.. code-block:: bash
+
+   docker run -it --rm \
+     -v /path/to/bids:/input \
+     -v /path/to/output:/output \
+     -v /path/to/smri:/smri \
+     -v /path/to/my_nextflow.config:/program/nextflow/nextflow.config \
+     cmrlab/megprep:0.0.3 \
+     -i /input -o /output --fs_subjects_dir /smri --steps meg_ica --resume
+
+Next Steps
+----------
+
+After your first report is generated:
+
+* Read :doc:`../tutorial/reports` to understand the static report.
+* Read :doc:`../tutorial/outputs` to find processed files.
+* Read :doc:`Full Workflow <../tutorial/full_workflow>` when you are ready to
+  run anatomy, epochs, covariance, coregistration, and source reconstruction.
+* Read :doc:`../reference/configuration` when you need full parameter details.
+* Read :doc:`../reference/examples` for resting-state, task-based, source
+  reconstruction, cluster, and empty-room covariance examples.

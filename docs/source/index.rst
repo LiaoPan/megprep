@@ -1,125 +1,116 @@
-.. megprep documentation master file, created by
-   sphinx-quickstart on Wed Aug 30 22:11:33 2023.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+MEGPrep Documentation
+=====================
 
-Welcome to MEGPrep's documentation!
-=================================
-`MEGPrep <https://github.com/LiaoPan/megprep>`_ is a fully automated preprocessing pipeline for MEG (Magnetoencephalography) data, built on the MNE-Python framework and leveraging the power of Nextflow.
-It is specifically designed to address the challenges of large-scale MEG data processing with a strong emphasis on reproducibility, efficiency, and user-friendliness in various research environments.
+`MEGPrep <https://github.com/LiaoPan/megprep>`_ is a reproducible Nextflow
+pipeline for large-scale MEG preprocessing, built on MNE-Python and designed
+for containerized local, cluster, and cohort-scale workflows.
 
+It provides configurable continuous preprocessing, automated artifact
+detection, ICA-based cleaning, task or resting-state epoching, MEG-MRI
+coregistration, source reconstruction, and static quality-control reports.
 
-Features
----------
+.. grid:: 1 1 2 4
+   :gutter: 2
+   :class-container: megprep-home-links
 
-.. grid::
+   .. grid-item-card:: :material-regular:`rocket_launch;1.4em` Install
+      :link: quickstart/installation.html
+      :class-card: megprep-nav-card
 
-   .. grid-item::
-      :columns: 12 12 12 6
+      Container, Apptainer/Singularity, and local source installation paths.
 
-      .. card:: Reliability and Robustness
-         :class-card: sd-border-0
-         :shadow: none
-         :class-title: sd-fs-5
+   .. grid-item-card:: :material-regular:`bolt;1.4em` Quickstart
+      :link: quickstart/quick_guide.html
+      :class-card: megprep-nav-card
 
-         .. div:: sd-font-normal
+      Run your first dataset with default settings and inspect the report.
 
-            MEGPrep ensures reliable and robust MEG data processing. Standardized environments through containerization, using Docker and Singularity, guarantee consistent results across computational setups. This minimizes variability and ensures reproducibility across different systems, facilitating cross-subject and cross-site studies of MEG data.
+   .. grid-item-card:: :material-regular:`account_tree;1.4em` Workflow
+      :link: details/pipeline_details.html
+      :class-card: megprep-nav-card
 
-   .. grid-item::
-      :columns: 12 12 12 6
+      Step-by-step execution order, branch conditions, inputs, and outputs.
 
-      .. card:: Modularity and Integrability
-         :class-card: sd-border-0
-         :shadow: none
-         :class-title: sd-fs-5
+   .. grid-item-card:: :material-regular:`settings;1.4em` Config
+      :link: reference/configuration.html
+      :class-card: megprep-nav-card
 
-         .. div:: sd-font-normal
+      Formal ``nextflow.config`` reference with parameter meanings and defaults.
 
-            MEGPrep is designed with modularity in mind, allowing users to customize their preprocessing workflows easily. It integrates seamlessly with various libraries, including mne-python, enhancing its functionality for processing and analyzing MEG data.
+Core Capabilities
+-----------------
 
-   .. grid-item::
-      :columns: 12 12 12 6
+.. grid:: 1 1 2 3
+   :gutter: 2
+   :class-container: megprep-feature-grid
 
-      .. card:: Acceleration and Parallelization
-         :class-card: sd-border-0
-         :shadow: none
-         :class-title: sd-fs-5
+   .. grid-item-card:: Reproducible Execution
+      :class-card: megprep-feature-card
 
-         .. div:: sd-font-normal
+      Docker and Apptainer/Singularity workflows keep runtime environments
+      consistent across workstations, servers, and clusters.
 
-            By using the Nextflow framework, MEGPrep dramatically accelerates every step of the preprocessing pipeline. It is optimized for high parallelization, capable of managing heavy workloads and significantly speeding up data processing through concurrent execution of tasks. This capability is essential for conducting large benchmarks and effective comparisons across various tools and methodologies.
+   .. grid-item-card:: Configurable Preprocessing
+      :class-card: megprep-feature-card
 
-   .. grid-item::
-      :columns: 12 12 12 6
+      Filtering, notch filtering, resampling, Maxwell filtering, artifact
+      detection, ICA, epoching, and source settings are configured in one file.
 
-      .. card:: Interoperability and standards
-         :class-card: sd-border-0
-         :shadow: none
-         :class-title: sd-fs-5
+   .. grid-item-card:: Automated QC
+      :class-card: megprep-feature-card
 
-         .. div:: sd-font-normal
+      Bad channels, bad segments, ICA components, coregistration distances,
+      epoch rejection, and workflow completeness are summarized for review.
 
-            MEGPrep includes an interactive reporting feature based on Streamlit, allowing users to visualize quality control metrics at each processing step. These reports provide alerts for any anomalies detected in the data, ensuring that the quality of each stage of processing is maintained.
+   .. grid-item-card:: Task and Resting Data
+      :class-card: megprep-feature-card
 
+      The continuous preprocessing core is task independent, while optional
+      epoching supports fixed-length resting windows, trigger events, or BIDS
+      event files.
 
-   .. grid-item::
-      :columns: 12 12 12 6
+   .. grid-item-card:: Anatomy and Source Modeling
+      :class-card: megprep-feature-card
 
-      .. card:: Parameter Configuration
-         :class-card: sd-border-0
-         :shadow: none
-         :class-title: sd-fs-5
+      FreeSurfer or DeepPrep outputs can be reused or generated before BEM,
+      coregistration, forward modeling, and source reconstruction.
 
-         .. div:: sd-font-normal
+   .. grid-item-card:: Portable Reports
+      :class-card: megprep-feature-card
 
-            MEGPrep offers an easy-to-use configuration system, allowing users to specify parameters simply and intuitively. This configurability empowers researchers to adapt the preprocessing pipeline to their unique datasets and experimental needs without complex coding.
+      Static HTML reports bundle subject pages, figures, sidecars, CSV files,
+      JSON summaries, workflow metadata, and the effective config snapshot.
 
+Where to Go Next
+----------------
 
-   .. grid-item::
-      :columns: 12 12 12 6
+.. grid:: 1 1 2 4
+   :gutter: 2
+   :class-container: megprep-next-grid
 
-      .. card:: Automated Processes
-         :class-card: sd-border-0
-         :shadow: none
-         :class-title: sd-fs-5
+   .. grid-item-card:: Run Locally
+      :link: tutorial/tutorial_local.html
+      :class-card: megprep-next-card
 
-         .. div:: sd-font-normal
+      Docker command structure, mounts, and common runtime options.
 
-            MEGPrep enhances automated detection processes, including Automatic Artifacts Rejection, ICA (Independent Component Analysis) Automatic Detection, and auto-coregistration. These automated features streamline the preprocessing steps, reduce manual intervention, and improve accuracy and efficiency in artifact handling and data integration.
+   .. grid-item-card:: Run on a Cluster
+      :link: tutorial/tutorial_cluster.html
+      :class-card: megprep-next-card
 
-.. grid::
+      SLURM and Singularity/Apptainer execution notes.
 
-   .. grid-item::
-      :columns: 6 6 6 4
+   .. grid-item-card:: Full Workflow
+      :link: tutorial/full_workflow.html
+      :class-card: megprep-next-card
 
-      .. card:: :material-regular:`rocket_launch;2em` Installation
-         :class-card: sd-text-black sd-bg-light
-         :link: quickstart/installation.html
+      Anatomy, epochs, covariance, coregistration, and source-level runs.
 
-   .. grid-item::
-      :columns: 6 6 6 4
+   .. grid-item-card:: Read QC Metrics
+      :link: reference/qc_metrics.html
+      :class-card: megprep-next-card
 
-      .. card:: :material-regular:`bolt;2em` Guide for Beginner
-         :class-card: sd-text-black sd-bg-light
-         :link: quickstart/quick_guide.html
-
-   .. grid-item::
-      :columns: 6 6 6 4
-
-      .. card:: :material-regular:`library_books;2em` Concepts
-         :class-card: sd-text-black sd-bg-light
-         :link: details/pipeline_details.html
-
-
-
-..   .. grid-item::
-      :columns: 6 6 6 4
-
-..      .. card:: :material-regular:`settings;2em` Quality Reference
-         :class-card: sd-text-black sd-bg-light
-         :link: quality_reference.html
-
+      How report metrics are computed and how to interpret alarms.
 
 .. toctree::
    :hidden:
@@ -128,6 +119,7 @@ Features
 
    quickstart/installation
    quickstart/quick_guide.rst
+   tutorial/full_workflow.rst
 
 .. toctree::
    :hidden:
@@ -136,7 +128,6 @@ Features
 
    tutorial/tutorial_local.rst
    tutorial/tutorial_cluster.rst
-
    tutorial/reports.rst
    tutorial/outputs.rst
 
@@ -147,6 +138,11 @@ Features
 
    details/pipeline_details.rst
 
+.. toctree::
+   :hidden:
+   :maxdepth: 2
+   :caption: Reference
 
-
-
+   reference/configuration.rst
+   reference/qc_metrics.rst
+   reference/examples.rst

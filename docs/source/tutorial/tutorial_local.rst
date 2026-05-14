@@ -4,22 +4,27 @@ Local
 Run MEGPrep
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+The example below runs the default full MEG workflow with an existing
+FreeSurfer/DeepPrep ``SUBJECTS_DIR``. Add ``--steps all`` if structural MRI
+processing should run in the same command.
+
 .. code-block:: bash
 
     docker run -it --rm \
         -v /data/datasets/SMN4Lang:/input \
-        -v /data/datasets/SMN4Lang/preprocessed:/output \
+        -v /data/datasets/SMN4Lang/megprep_out:/output \
         -v /data/datasets/SMN4Lang/smri:/smri \
         -v /data/megprep/license.txt:/fs_license.txt \
         -v /data/nextflow.config:/program/nextflow/nextflow.config \
         cmrlab/megprep:0.0.3 \
         -i /input \
         -o /output \
-        --fs_license_file /license.txt \
+        --fs_license_file /fs_license.txt \
         --fs_subjects_dir /smri \
+        --steps meg_all \
         --resume
 
-In this command:  
+In this command:
 
 
 + ``-it``
@@ -31,10 +36,10 @@ In this command:
 + ``-v /data/datasets/SMN4Lang:/input``  
    This option creates a volume mount, mapping the host directory `/data/datasets/SMN4Lang` to the container's `/input` directory, allowing the container to access input data.  
 
-+ ``-v /data/datasets/SMN4Lang/preprocessed:/output``  
-   This maps the output directory in the host to the container's `/output` directory for saving processed data.  
++ ``-v /data/datasets/SMN4Lang/megprep_out:/output``
+   This maps the output directory in the host to the container's `/output` directory for saving processed data.
 
-+ ``-v /data/datasets/SMN4Lang_smri:/smri``  
++ ``-v /data/datasets/SMN4Lang/smri:/smri``
    This mounts a directory containing SMRI data(T1w, Freesurfer's SUBJECTS_DIR) to the container's `/smri` directory for application use.
 
 + ``-v /data/megprep/license.txt:/fs_license.txt``  
@@ -55,8 +60,12 @@ In this command:
 + ``--fs_license_file /fs_license.txt``  
     This passes the path to the FreeSurfer license file to the program, ensuring it can be recognized correctly.  
 
-+ ``--fs_subjects_dir /smri``  
-    This specifies the separate SMRI data directory for use by the program.  
++ ``--fs_subjects_dir /smri``
+    This specifies the separate SMRI data directory for use by the program.
+
++ ``--steps meg_all``
+    This selects full MEG processing using the existing anatomy in
+    ``/smri``. See :doc:`../reference/configuration` for all stage options.
 
 + ``--resume``
-    This flag allows the process to resume execution from the last completed step, which is useful for long-running tasks to avoid re-running completed steps.  
+    This flag allows the process to resume execution from the last completed step, which is useful for long-running tasks to avoid re-running completed steps.

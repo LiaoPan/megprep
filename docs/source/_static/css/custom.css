@@ -1,0 +1,102 @@
+/* MEGPrep documentation polish */
+
+:root {
+  --megprep-accent: #276b75;
+  --megprep-accent-strong: #18535c;
+  --megprep-accent-soft: #e8f3f4;
+  --megprep-border: #d7e4e7;
+  --megprep-panel: #f7fbfc;
+  --megprep-text: #17212b;
+  --megprep-muted: #5f6f78;
+}
+
+.bd-main .bd-content .bd-article-container {
+  max-width: 980px;
+}
+
+.bd-content table.table tbody tr:hover,
+.bd-content table.docutils tbody tr:hover,
+.bd-content .table tbody tr:hover {
+  background-color: var(--megprep-accent-soft) !important;
+}
+
+.bd-content table.table tbody tr:hover > *,
+.bd-content table.docutils tbody tr:hover > *,
+.bd-content .table tbody tr:hover > * {
+  background-color: transparent !important;
+}
+
+.megprep-home-links {
+  margin: 1.65rem 0 2.2rem;
+}
+
+.megprep-nav-card {
+  border: 1px solid var(--megprep-border) !important;
+  border-radius: 8px !important;
+  background: linear-gradient(180deg, #ffffff 0%, var(--megprep-panel) 100%) !important;
+  box-shadow: 0 10px 24px rgba(21, 65, 73, 0.08) !important;
+  color: var(--megprep-text) !important;
+  min-height: 148px;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.megprep-nav-card:hover {
+  border-color: rgba(39, 107, 117, 0.55) !important;
+  box-shadow: 0 14px 30px rgba(21, 65, 73, 0.14) !important;
+  transform: translateY(-2px);
+}
+
+.megprep-nav-card .sd-card-title {
+  color: var(--megprep-accent-strong) !important;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 1.05rem;
+  line-height: 1.2;
+  margin-bottom: 0.55rem;
+  white-space: nowrap;
+}
+
+.megprep-nav-card .sd-card-body,
+.megprep-feature-card .sd-card-body,
+.megprep-next-card .sd-card-body {
+  color: var(--megprep-muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.megprep-feature-grid,
+.megprep-next-grid {
+  margin-top: 0.9rem;
+}
+
+.megprep-feature-card,
+.megprep-next-card {
+  border: 1px solid var(--megprep-border) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  background: #fff !important;
+}
+
+.megprep-feature-card .sd-card-title,
+.megprep-next-card .sd-card-title {
+  color: var(--megprep-text) !important;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.megprep-next-card {
+  background: var(--megprep-panel) !important;
+}
+
+.megprep-next-card:hover {
+  border-color: rgba(39, 107, 117, 0.5) !important;
+}
+
+.bd-content a {
+  color: var(--megprep-accent-strong);
+}
+
+.bd-content a:hover {
+  color: var(--megprep-accent);
+}

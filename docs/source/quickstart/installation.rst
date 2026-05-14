@@ -1,42 +1,123 @@
 Installation
-=============
+============
 
-To install MEGPrep, you need to ensure that Docker are installed on your system. Please follow these steps for installation:
+MEGPrep is officially distributed as a container image. The containerized
+workflow is recommended because it provides the most reproducible runtime and
+avoids most local dependency conflicts.
 
+If Docker cannot be installed, the Docker daemon is unavailable, or the image
+cannot be pulled in your network environment, use the local development
+installation workflow. The local workflow installs MEGPrep from source and can
+run without a Docker image, but local system libraries and package versions may
+affect reproducibility.
 
-Install Docker
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Install Docker according to your operating system. For detailed installation instructions, please visit the `Docker official website <https://docs.docker.com/get-docker/>`_.
+Recommended: Containerized One-Click Install
+--------------------------------------------
+
+The scripts under ``scripts/install/`` install or reuse a container runtime,
+pull ``cmrlab/megprep:<version>``, and verify the installation by running the
+MEGPrep help command.
+
+Linux:
 
 .. code-block:: bash
-    $ docker info # Confirm that docker is installed correctly
 
+   bash scripts/install/install_megprep_linux.sh
+   bash scripts/install/install_megprep_linux.sh 0.0.3
 
-.. `Install Singularity <https://docs.sylabs.io/guides/3.5/user-guide/index.html>`_ [options]
-
-
-Download MEGPrep Image
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+macOS:
 
 .. code-block:: bash
 
-    docker pull cmrlab/megprep:<version>
+   bash scripts/install/install_megprep_macos.sh
+   bash scripts/install/install_megprep_macos.sh 0.0.3
 
+Windows PowerShell:
 
-See the parameter description
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code-block:: powershell
 
-docker run cmrlab/megprep:<version> -h
-Usage: /program/nextflow/run.sh [options]
-Options:
-  -c, --config          Specify the Nextflow config file (default: nextflow.config)
-  -i, --input           Specify the input directory
-  -o, --output          Specify the output directory(including report results.)
-  -r, --view-report     Run Streamlit to view the report (does not run Nextflow)
-  --fs_license_file     Specify the FreeSurfer license file
-  --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory containing processed T1 results
-  --t1_dir              Specify the T1 image directory
-  --t1_input_type       Specify the T1 input type
-  --anat_only           Run only the FreeSurfer related steps
-  --meg_only            Run only the MEG related steps
-  --resume              Resume the previous run(nextflow options)
+   powershell -ExecutionPolicy Bypass -File .\scripts\install\install_megprep_windows.ps1
+   powershell -ExecutionPolicy Bypass -File .\scripts\install\install_megprep_windows.ps1 -ImageTag 0.0.3
+
+On Linux, the installer can use Docker or Apptainer/Singularity:
+
+.. code-block:: bash
+
+   bash scripts/install/install_megprep_linux.sh 0.0.3 docker
+   bash scripts/install/install_megprep_linux.sh 0.0.3 apptainer
+
+See ``scripts/install/README.md`` for installer options and troubleshooting.
+
+Manual Docker Installation
+--------------------------
+
+Install Docker according to your operating system. For detailed installation
+instructions, visit the `Docker official website <https://docs.docker.com/get-docker/>`_.
+
+Check Docker:
+
+.. code-block:: bash
+
+   docker info
+
+Pull the MEGPrep image:
+
+.. code-block:: bash
+
+   docker pull cmrlab/megprep:<version>
+
+Replace ``<version>`` with a release tag such as ``0.0.3`` or ``latest``.
+
+Alternative: Local Installation Without Docker
+----------------------------------------------
+
+The scripts under ``scripts/install-dev/`` provide a source-based local
+installation path for Linux environments where container installation is not
+available or image pulling is blocked. This workflow installs or reuses Conda,
+Nextflow, FreeSurfer, and MEGPrep source dependencies in a local installation
+directory.
+
+.. code-block:: bash
+
+   bash scripts/install-dev/install_megprep_dev_linux.sh
+   bash scripts/install-dev/install_megprep_dev_linux.sh --install-dir /data/megprep-dev
+   bash scripts/install-dev/install_megprep_dev_linux.sh --no-freesurfer
+
+After installation, load the generated environment:
+
+.. code-block:: bash
+
+   source <install-dir>/env.sh
+
+See ``scripts/install-dev/README.md`` for the full local installation workflow.
+
+Docker Entry Point Options
+--------------------------
+
+Use ``--steps`` as the primary way to choose the pipeline stage. For example,
+use ``--steps anatomy`` for structural MRI only and ``--steps meg_all`` for the
+full MEG workflow with existing anatomy.
+
+.. code-block:: bash
+
+   docker run cmrlab/megprep:<version> -h
+
+.. code-block:: text
+
+   Usage: /program/nextflow/run.sh [options]
+   Options:
+     -c, --config          Specify the Nextflow config file
+     -i, --input           Specify the input directory
+     -o, --output          Specify the output directory including report results
+     -s, --steps           Pipeline mode, for example all, meg_all, anatomy, report
+     -r, --view-report     Run Streamlit to view the report and do not run Nextflow
+     --fs_license_file     Specify the FreeSurfer license file
+     --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory
+     --t1_dir              Specify the T1 image directory
+     --t1_input_type       Specify the T1 input type
+     --resume              Resume the previous run
+
+Common ``--steps`` values are ``meg_all`` for full MEG processing with existing
+anatomy, ``all`` for anatomy plus full MEG, ``anatomy`` for structural MRI only,
+and ``report`` for static report regeneration. See
+:doc:`../reference/configuration` for all modes and modifiers.
