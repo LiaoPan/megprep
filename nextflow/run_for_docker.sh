@@ -18,8 +18,10 @@ T1_INPUT_TYPE=""
 ANAT_ONLY=false
 MEG_ONLY=false
 VIEW_REPORT=false
+COHORT_MODE=false
 NEXTFLOW_FILE="/program/nextflow/meg_pipeline.nf"
 STREAMLIT_APP_PATH="/program/megprep/reports/reports.py"
+COHORT_REPORT_PATH="/program/megprep/reports/cohort_static_html_report.py"
 nextflow_args=()
 
 echo "Executor:"
@@ -44,7 +46,10 @@ while [[ "$#" -gt 0 ]]; do
         --meg_only) MEG_ONLY=true ;;
 
         # online reports
-        -r|--view_report) VIEW_REPORT=true ;;
+        -r|--view_report|--view-report) VIEW_REPORT=true ;;
+
+        # cohort mode
+        --cohort) COHORT_MODE=true ;;
 
         # nextflow options
         --resume) nextflow_args+=("-resume") ;;
@@ -57,6 +62,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  -o, --output          Specify the output directory(including report results.)"
             echo "  -s, --steps           Same as Nextflow --steps / params.steps (e.g. all, meg_all, anatomy, report, meg_epochs,skip_ica)"
             echo "  -r, --view-report     Run Streamlit to view the report (does not run Nextflow)"
+            echo "  --cohort              Treat --input as a directory of datasets; isolate each child's output and FreeSurfer SUBJECTS_DIR"
             echo "  --fs_license_file     Specify the FreeSurfer license file"
             echo "  --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory containing processed T1 results"
             echo "  --t1_dir              Specify the T1 image directory"
@@ -108,39 +114,47 @@ fi
 
 echo "Using configuration file: $CONFIG_FILE"
 
-mkdir -p "$OUTPUT_DIR"
-cp "$CONFIG_FILE" "$RUN_CONFIG_FILE"
+write_run_config() {
+    local run_input_dir="$1"
+    local run_output_dir="$2"
+    local run_config_file="$3"
+    local run_fs_subjects_dir="${4:-$FS_SUBJECTS_DIR}"
+    local run_t1_dir="${5:-$T1_DIR}"
 
-# Update dataset_dir and output_dir in the configuration file
-if [ ! -z "$INPUT_DIR" ]; then
-    echo "Setting dataset_dir in config to: $INPUT_DIR"
-    sed -i "s|^\s*dataset_dir\s*=.*|    dataset_dir = \"$INPUT_DIR\"|" "$RUN_CONFIG_FILE"
-fi
+    cp "$CONFIG_FILE" "$run_config_file"
 
-if [ ! -z "$OUTPUT_DIR" ]; then
-    echo "Setting output_dir in config to: $OUTPUT_DIR"
-    sed -i "s|^\s*output_dir\s*=.*|    output_dir = \"$OUTPUT_DIR\"|" "$RUN_CONFIG_FILE"
-fi
+    if [ -n "$run_input_dir" ]; then
+        echo "Setting dataset_dir in config to: $run_input_dir"
+        sed -i "s|^\s*dataset_dir\s*=.*|    dataset_dir = \"$run_input_dir\"|" "$run_config_file"
+    fi
 
-if [ ! -z "$FS_SUBJECTS_DIR" ]; then
-    echo "Using FreeSurfer subjects directory: $FS_SUBJECTS_DIR"
-    sed -i "s|^\s*fs_subjects_dir\s*=.*|    fs_subjects_dir = \"$FS_SUBJECTS_DIR\"|" "$RUN_CONFIG_FILE"
-fi
+    if [ -n "$run_output_dir" ]; then
+        echo "Setting output_dir in config to: $run_output_dir"
+        sed -i "s|^\s*output_dir\s*=.*|    output_dir = \"$run_output_dir\"|" "$run_config_file"
+    fi
 
-if [ ! -z "$FS_LICENSE_FILE" ]; then
-    echo "Using FreeSurfer license file: $FS_LICENSE_FILE"
-    sed -i "s|^\s*fs_license\s*=.*|    fs_license = \"$FS_LICENSE_FILE\"|" "$RUN_CONFIG_FILE"
-fi
+    if [ -n "$run_fs_subjects_dir" ]; then
+        echo "Using FreeSurfer subjects directory: $run_fs_subjects_dir"
+        mkdir -p "$run_fs_subjects_dir"
+        sed -i "s|^\s*fs_subjects_dir\s*=.*|    fs_subjects_dir = \"$run_fs_subjects_dir\"|" "$run_config_file"
+    fi
 
-if [ ! -z "$T1_DIR" ]; then
-    echo "Setting t1_dir in config to: $T1_DIR"
-    sed -i "s|^\s*t1_dir\s*=.*|    t1_dir = \"$T1_DIR\"|" "$RUN_CONFIG_FILE"
-fi
+    if [ -n "$FS_LICENSE_FILE" ]; then
+        echo "Using FreeSurfer license file: $FS_LICENSE_FILE"
+        sed -i "s|^\s*fs_license\s*=.*|    fs_license = \"$FS_LICENSE_FILE\"|" "$run_config_file"
+    fi
 
-if [ ! -z "$T1_INPUT_TYPE" ]; then
-    echo "Setting t1_input_type in config to: $T1_INPUT_TYPE"
-    sed -i "s|^\s*t1_input_type\s*=.*|    t1_input_type = \"$T1_INPUT_TYPE\"|" "$RUN_CONFIG_FILE"
-fi
+    if [ -n "$run_t1_dir" ]; then
+        echo "Setting t1_dir in config to: $run_t1_dir"
+        sed -i "s|^\s*t1_dir\s*=.*|    t1_dir = \"$run_t1_dir\"|" "$run_config_file"
+        sed -i "s|^\s*t1_bids_dir\s*=.*|    t1_bids_dir = \"$run_t1_dir\"|" "$run_config_file"
+    fi
+
+    if [ -n "$T1_INPUT_TYPE" ]; then
+        echo "Setting t1_input_type in config to: $T1_INPUT_TYPE"
+        sed -i "s|^\s*t1_input_type\s*=.*|    t1_input_type = \"$T1_INPUT_TYPE\"|" "$run_config_file"
+    fi
+}
 
 
 # Call Nextflow to run the pipeline with specified configurations
@@ -167,6 +181,53 @@ if [ -n "$STEPS" ]; then
     steps_args=(--steps "$STEPS")
 fi
 
+run_nextflow_pipeline() {
+    local run_config_file="$1"
+    local run_output_dir="$2"
+    local run_work_dir="$3"
+    local work_args=()
+
+    mkdir -p "$run_output_dir"
+    if [ -n "$run_work_dir" ]; then
+        mkdir -p "$run_work_dir"
+        work_args=(-w "$run_work_dir")
+    fi
+
+    nextflow run "${NEXTFLOW_FILE}" \
+        -c "${run_config_file}" \
+        "${steps_args[@]}" \
+        "${work_args[@]}" \
+        -with-report "${run_output_dir}/report.html" \
+        -with-timeline "${run_output_dir}/timeline.html" \
+        -with-trace \
+        "${nextflow_args[@]}"
+
+    cp "$run_config_file" "${run_output_dir}/nextflow.config"
+}
+
+sanitize_dataset_name() {
+    local raw_name="$1"
+    raw_name="${raw_name// /_}"
+    printf "%s" "$raw_name" | tr -c "A-Za-z0-9_.-" "_"
+}
+
+resolve_cohort_t1_dir() {
+    local dataset_dir="$1"
+    local dataset_name="$2"
+
+    if [ -z "$T1_DIR" ]; then
+        printf "%s" "$dataset_dir"
+        return
+    fi
+
+    if [ -d "${T1_DIR}/${dataset_name}" ]; then
+        printf "%s" "${T1_DIR}/${dataset_name}"
+        return
+    fi
+
+    printf "%s" "$T1_DIR"
+}
+
 # activate Anaconda virtualenv and virtual display
 #/usr/bin/supervisord  -c /etc/supervisor/conf.d/supervisord.conf
 #Xvfb :99 -screen 0 1920x1080x24 &
@@ -174,13 +235,52 @@ fi
 #xhost +
 #export QT_QPA_PLATFORM=xcb #offscreen
 
-nextflow run "${NEXTFLOW_FILE}" \
-    -c "${RUN_CONFIG_FILE}" \
-    "${steps_args[@]}" \
-    -with-report "${OUTPUT_DIR}/report.html" \
-    -with-timeline "${OUTPUT_DIR}/timeline.html" \
-    -with-trace \
-    "${nextflow_args[@]}"
+mkdir -p "$OUTPUT_DIR"
 
-cp "$RUN_CONFIG_FILE" "${OUTPUT_DIR}/nextflow.config"
+if [ "$COHORT_MODE" = true ]; then
+    if [ ! -d "$INPUT_DIR" ]; then
+        echo "Error: --cohort requires --input to be a directory containing dataset subdirectories."
+        exit 1
+    fi
+
+    echo "Running cohort mode. Dataset collection root: $INPUT_DIR"
+    datasets_output_dir="${OUTPUT_DIR}/datasets"
+    cohort_work_dir="${OUTPUT_DIR}/work"
+    cohort_fs_subjects_base="${FS_SUBJECTS_DIR:-/smri}"
+    mkdir -p "$datasets_output_dir" "$cohort_work_dir"
+    found_dataset=0
+
+    for dataset_dir in "$INPUT_DIR"/*; do
+        if [ ! -d "$dataset_dir" ]; then
+            continue
+        fi
+
+        original_dataset_name="$(basename "$dataset_dir")"
+        dataset_name="$(sanitize_dataset_name "$original_dataset_name")"
+        dataset_output_dir="${datasets_output_dir}/${dataset_name}"
+        dataset_run_config="${OUTPUT_DIR}/run_nextflow_${dataset_name}.config"
+        dataset_fs_subjects_dir="${cohort_fs_subjects_base}/${dataset_name}"
+        dataset_t1_dir="$(resolve_cohort_t1_dir "$dataset_dir" "$original_dataset_name")"
+
+        echo "Cohort dataset: $dataset_name"
+        write_run_config "$dataset_dir" "$dataset_output_dir" "$dataset_run_config" "$dataset_fs_subjects_dir" "$dataset_t1_dir"
+        run_nextflow_pipeline "$dataset_run_config" "$dataset_output_dir" "${cohort_work_dir}/${dataset_name}"
+        found_dataset=1
+    done
+
+    if [ "$found_dataset" -eq 0 ]; then
+        echo "Error: no dataset subdirectories were found under $INPUT_DIR."
+        exit 1
+    fi
+
+    python "$COHORT_REPORT_PATH" \
+        --cohort_root "$datasets_output_dir" \
+        --output_dir "${OUTPUT_DIR}/cohort_static_html_report"
+
+    chmod -R 777 "$OUTPUT_DIR"
+    exit 0
+fi
+
+write_run_config "$INPUT_DIR" "$OUTPUT_DIR" "$RUN_CONFIG_FILE"
+run_nextflow_pipeline "$RUN_CONFIG_FILE" "$OUTPUT_DIR" ""
 chmod -R 777 /output

@@ -190,12 +190,51 @@ The report also bundles a plain-text config snapshot at `static_html_report/data
 
 For `--steps report`, MEGPrep regenerates only the static report. If an earlier `megprep_run_manifest.json` exists, the report build uses it to keep the previous pipeline workflow in the diagram and marks the current run as report-only in the generated report bundle, but it restores the original `preprocessed/logs/megprep_run_manifest.json` afterward so the preprocessing provenance is not overwritten.
 
+### Cohort mode: multiple datasets under one root
+
+For a directory that contains many independent MEG datasets, use **`--cohort`**.
+MEGPrep treats each immediate child directory as one dataset, runs the existing
+single-dataset pipeline into an isolated output folder, and then builds a
+cohort-level static report that links back to each dataset report.
+In cohort mode, FreeSurfer/DeepPrep outputs are also isolated by dataset under
+`<fs_subjects_dir>/<dataset_name>` so repeated MRI subject IDs such as `sub-01`
+do not overwrite each other.
+
+```bash
+docker run -it --rm \
+  -v /data/liaopan/datasets:/input \
+  -v /data/liaopan/megprep_cohort:/output \
+  -v /data/liaopan/smri:/smri \
+  -v /data/liaopan/megprep/license.txt:/fs_license.txt \
+  cmrlab/megprep:0.0.3 \
+  -i /input -o /output \
+  --fs_license_file /fs_license.txt --fs_subjects_dir /smri \
+  --steps meg_artifacts \
+  --cohort
+```
+
+Outputs are organized as:
+
+- `/output/datasets/<dataset_name>/static_html_report/index.html` for the existing dataset-level report.
+- `/smri/<dataset_name>/` for that dataset's FreeSurfer/DeepPrep subject outputs when `--fs_subjects_dir /smri` is used.
+- `/output/cohort_static_html_report/index.html` for the cross-dataset cohort dashboard.
+
+For `--steps all` and anatomy-enabled modes, each dataset's T1 input defaults to
+the same child dataset directory as the MEG input. If you pass `--t1_dir` and it
+contains matching child directories, MEGPrep uses `--t1_dir/<dataset_name>` for
+each run; otherwise it uses the provided `--t1_dir` for all datasets.
+
+Use a milestone such as `--steps meg_artifacts` or `--steps meg_ica` for a quick
+first pass across many public datasets, then resume selected datasets with a
+deeper step when needed.
+
 ### Using pipeline steps with Docker
 
 The image entrypoint is [`nextflow/run_for_docker.sh`](nextflow/run_for_docker.sh) (installed in the container as `/program/nextflow/run.sh`). **Step selection uses the same values** as in the [Pipeline steps](#pipeline-steps) table above.
 
 - **After the image name**, pass **`-s`** / **`--steps`** (forwarded to Nextflow as `--steps`). If you omit it, the workflow uses **`params.steps`** from the config (default in the baked-in image config is **`meg_all`**).
 - **Modifiers** that contain commas must be **quoted for the shell**, e.g. `--steps 'meg_epochs,skip_ica'`.
+- **Cohort mode** uses `--cohort`; in that mode `-i` / `--input` should point to a directory whose immediate children are datasets, and `--fs_subjects_dir` is used as the base directory for per-dataset FreeSurfer outputs.
 - You can instead set **`steps = '...'`** inside the Nextflow file you mount at **`/program/nextflow/nextflow.config`**; a container **`--steps`** / **`-s`** argument **overrides** that for the run.
 - **`-s`** here is the **MEGPrep** flag (input path is **`-i`**), not Docker’s **`-i`** (interactive). Typical pattern: `docker run ... cmrlab/megprep:<tag> -i /input -o /output ... --steps all`.
 - The Docker entrypoint copies the mounted config to `/program/nextflow/run_nextflow.config`, applies command-line path overrides, runs Nextflow with that file, then copies it to `<output>/nextflow.config` and snapshots it into `preprocessed/logs/` for the static HTML report.
@@ -238,6 +277,7 @@ docker run -it --rm \
 | `-o`, `--output` | Specify the output directory (including report results) |
 | `-s`, `--steps` | **Nextflow (`meg_anat_pipeline_for_docker.nf`):** sets `params.steps` (e.g. `all`, `meg_all`, `anatomy`, `report`). With **Docker**, pass this **after the image name**; see [Using pipeline steps with Docker](#using-pipeline-steps-with-docker). Same semantics as [Pipeline steps](#pipeline-steps). |
 | `-r`, `--view-report` | Run Streamlit to view the report (does not run Nextflow) |
+| `--cohort` | Treat the input directory as a collection of datasets, run each child dataset separately, and generate a cohort-level static report |
 | `--fs_license_file` | Specify the FreeSurfer license file path |
 | `--fs_subjects_dir` | Specify the FreeSurfer `SUBJECTS_DIR` containing processed T1 results |
 | `--t1_dir` | Specify the T1 image directory |
