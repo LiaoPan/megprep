@@ -127,10 +127,10 @@ The file [`nextflow/meg_anat_pipeline_for_docker.nf`](nextflow/meg_anat_pipeline
 
 | Primary `steps` | What it does |
 | :--- | :--- |
-| `meg_all` | **Default.** Full MEG processing (import → OSL → artifacts → ICA → epochs → covariance → coregistration → forward → source) using the existing **`fs_subjects_dir`**; does **not** run the T1/FreeSurfer/DeepPrep structural pipeline. |
+| `meg_all` | **Default.** Full MEG processing (import → basic preprocessing → artifacts → ICA → epochs → covariance → coregistration → forward → source) using the existing **`fs_subjects_dir`**; does **not** run the T1/FreeSurfer/DeepPrep structural pipeline. |
 | `all` | Run **structural imaging** (T1 import, recon, BEM) **and** the full MEG chain in one go. |
 | `anatomy` | **Structural imaging only** (no MEG). |
-| `meg_artifacts` | MEG up to **artifact detection** (after OSL preprocessing), then the static HTML QC report. |
+| `meg_artifacts` | MEG up to **artifact detection** (after basic preprocessing), then the static HTML QC report. |
 | `meg_ica` | Through **ICA** (fit, label, apply), then report. |
 | `meg_epochs` | Through **epoching**, then report. |
 | `report` | Regenerate the **static HTML** report only (scans existing `preproc_dir`; no MEG or MRI processes). |
@@ -141,10 +141,20 @@ The file [`nextflow/meg_anat_pipeline_for_docker.nf`](nextflow/meg_anat_pipeline
 
 | Modifier | When it is valid | Effect |
 | :--- | :--- | :--- |
-| `skip_ica` | Only with **`meg_epochs`** | Skips ICA; builds epochs from OSL `*_preproc-raw` files. Not available for `all` / `meg_all` (downstream forward/source expect ICA-clean raw). |
+| `skip_ica` | Only with **`meg_epochs`** | Skips ICA; builds epochs from `*_preproc-raw` files produced by basic preprocessing. Not available for `all` / `meg_all` (downstream forward/source expect ICA-clean raw). |
 | `with_anatomy` | `meg_artifacts`, `meg_ica`, or `meg_epochs` (not `meg_all`) | Runs the structural pipeline **before** the selected MEG milestone in the same run. |
 
 **Note:** `do_fs` and `do_only_anatomy` are legacy switches. The Nextflow workflow is now driven by **`steps`**; use `--steps anatomy`, `--steps all`, or `--steps meg_all` instead of editing those legacy flags.
+
+#### Basic preprocessing
+
+The table above uses **basic preprocessing** for the first MEG-only signal steps (after import). They are defined in **`params.preproc_config`**; the repository default in [`nextflow/nextflow.config`](nextflow/nextflow.config) is:
+
+- **Band-pass filter** (0.5–125 Hz, IIR Butterworth)
+- **Notch filter** (50 Hz and 100 Hz)
+- **Resample** (250 Hz sampling rate)
+
+Optional **Maxwell / tSSS** for Elekta-style data is supported in the same YAML but commented out by default; enable it there and supply calibration paths when needed. For **CTF** runs, if a matching `*_headshape.pos` is present next to the raw file, **digitization from the headshape** is merged into the preprocessed FIF after those steps.
 
 **Examples (local Nextflow):**
 
