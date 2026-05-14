@@ -199,7 +199,6 @@ The image entrypoint is [`nextflow/run_for_docker.sh`](nextflow/run_for_docker.s
 - You can instead set **`steps = '...'`** inside the Nextflow file you mount at **`/program/nextflow/nextflow.config`**; a container **`--steps`** / **`-s`** argument **overrides** that for the run.
 - **`-s`** here is the **MEGPrep** flag (input path is **`-i`**), not Docker’s **`-i`** (interactive). Typical pattern: `docker run ... cmrlab/megprep:<tag> -i /input -o /output ... --steps all`.
 - The Docker entrypoint copies the mounted config to `/program/nextflow/run_nextflow.config`, applies command-line path overrides, runs Nextflow with that file, then copies it to `<output>/nextflow.config` and snapshots it into `preprocessed/logs/` for the static HTML report.
-- Historical `--anat_only` and `--meg_only` still work as container helper shortcuts when `--steps` is not provided; they map to `--steps anatomy` and `--steps meg_all`, respectively. Prefer `--steps` for new runs.
 
 **Examples:**
 
@@ -243,8 +242,6 @@ docker run -it --rm \
 | `--fs_subjects_dir` | Specify the FreeSurfer `SUBJECTS_DIR` containing processed T1 results |
 | `--t1_dir` | Specify the T1 image directory |
 | `--t1_input_type` | Specify the T1 input type |
-| `--anat_only` | **Container helper:** deprecated shortcut for `--steps anatomy` when `--steps` is not provided. |
-| `--meg_only` | **Container helper:** deprecated shortcut for `--steps meg_all` when `--steps` is not provided. |
 | `--resume` | Resume the previous run (Nextflow option) |
 
 ### Example: Running a Full Pipeline
