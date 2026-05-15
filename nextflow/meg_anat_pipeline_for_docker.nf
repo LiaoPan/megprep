@@ -258,8 +258,6 @@ process meg_preproc_osl {
     tag "${raw_subject_basename}"
 
     memory { 6.GB * task.attempt }
-    errorStrategy { task.exitStatus in 137..140 ? 'retry' : 'terminate' }
-    maxRetries 3
 
     input:
     path dataset_dir
@@ -316,8 +314,6 @@ process run_ICA {
     tag "${raw_subject_basename}"
 
     memory { 8.GB * task.attempt }
-    errorStrategy { task.exitStatus in 137..140 ? 'retry' : 'terminate' }
-    maxRetries 3
 
     input:
     path preproc_dir
@@ -449,8 +445,6 @@ process coregistration {
     tag "${raw_subject_dir_basename}"
 
     time '1h'
-    errorStrategy { task.exitStatus in 137..140 || task.exitStatus == 1 ? 'retry' : 'terminate' }
-    maxRetries 6
 
     input:
     path preproc_dir
@@ -483,77 +477,11 @@ process coregistration {
 }
 
 
-process coregistrations {
-    // condition: do_fs=false
-    tag "${raw_subject_dir_basename}"
-
-    time '1h'
-    errorStrategy { task.exitStatus in 137..140  || task.exitStatus == 1 ? 'retry' : 'terminate' }
-    maxRetries 6
-
-    input:
-    path preproc_dir
-    val raw_subject_path
-    path fs_subjects_dir
-
-    output:
-    path "${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename}/coreg-trans.fif",emit: trans_files
-    tuple val("${raw_subject_dir_basename}"),val("${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename}/coreg-trans.fif"),emit: meg_subject_id
-
-    script:
-    script_name = "${params.code_dir}/coregistration.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-    // Make sure the MRI has the same name as MEG
-    mri_subject_id = raw_subject_basename.split('_')[0]
-//     println("Extracted Subject ID: ${mri_subject_id}")
-    """
-    python ${script_name} \\
-        --raw_file ${raw_subject_path} \\
-        --subjects_dir ${fs_subjects_dir}/${mri_subject_id} \\
-        --visualize ${params.meg_visualize} \\
-        --output_dir ${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename} \\
-        --config "${params.core_config}"
-    """
-}
-
-// Estimate covariance from epoched data.
-process compute_covariances {
-    tag "${raw_subject_basename}"
-
-//     time '6h' // timeout
-    errorStrategy { task.exitStatus in 137..140 || task.exitStatus == 1 ? 'retry' : 'terminate' }
-    maxRetries 3
-
-    input:
-    path preproc_dir
-    val raw_subject_path
-
-    output:
-    path "${preproc_dir}/${params.covar_output_dir}/${raw_subject_dir_basename}/bl-cov.fif",emit: bl_cov_files
-    tuple val("${raw_subject_dir_basename}"),val("${preproc_dir}/${params.covar_output_dir}/${raw_subject_dir_basename}/bl-cov.fif"),emit: meg_subject_id
-
-    script:
-    script_name = "${params.code_dir}/compute_covariance.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-    """
-    python ${script_name} \\
-        --raw_data_file ${raw_subject_path} \\
-        --output_dir ${preproc_dir}/${params.covar_output_dir}/${raw_subject_dir_basename} \\
-        --visualize ${params.covar_visualize} \\
-        --covar_type ${params.covar_type} \\
-        --config "${params.covar_config}"
-    """
-}
-
-// Estimate covariance from continuous raw data.
+// Estimate covariance from either epoched data or continuous raw baseline data.
 process compute_covariance {
     tag "${raw_subject_dir_basename}"
 
 //     time '6h' // timeout
-    errorStrategy { task.exitStatus in 137..140 || task.exitStatus == 1 ? 'retry' : 'terminate' }
-    maxRetries 3
 
     input:
     path preproc_dir
@@ -633,10 +561,6 @@ process forward_solution {
 
 process source_imaging {
     tag "${raw_subject_dir_basename}"
-
-    errorStrategy { task.exitStatus in 137..140 || task.exitStatus == 1 ? 'retry' : 'ignore' }
-    maxRetries 6
-
 
     input:
     val src_type
@@ -729,6 +653,7 @@ process generate_static_html_report {
         --coreg_mean_threshold ${params.coreg_mean_threshold} \\
         --coreg_max_threshold ${params.coreg_max_threshold} \\
         --epoch_reject_rate_threshold ${params.epoch_reject_rate_threshold} \\
+        --task_log_mode "${params.static_task_log_mode}" \\
         --zip_output ${zip_output}
 
     echo "Static HTML report generated at ${report_output_dir}" > static_html_report_done.txt
@@ -894,10 +819,11 @@ workflow {
         run_manifest_ch = Channel.value(file(publishedManifest.absolutePath))
     }
 
-    // Snapshot Nextflow config(s) into preprocessed/logs (best-effort).
-    // Prefer workflow.configFiles when available so custom `-c /path/to/config` and Docker's
+    // Snapshot the effective Nextflow config into preprocessed/logs (best-effort).
+    // Prefer workflow.configFiles so custom `-c /path/to/config` and Docker's
     // /program/nextflow/run_nextflow.config are captured before the static report is built.
-    // Fallback to launchDir/projectDir conventional names for older Nextflow metadata.
+    // Custom config files are stored as run_nextflow.config to avoid confusing them with
+    // the project default nextflow.config.
     try {
         def logDir = new File("${params.preproc_dir}/logs")
         if (!logDir.exists() && !logDir.mkdirs()) {
@@ -905,64 +831,84 @@ workflow {
         } else {
             def launchDir = new File(workflow.launchDir.toString())
             def projectDir = new File(workflow.projectDir.toString())
-            def copiedNames = new HashSet()
-            def copiedPairs = new HashSet()
+            def copiedName = null
+            def copiedSourceName = null
 
-            def copyConfig = { File src, String targetName, boolean overwrite ->
+            def copyConfig = { File src, String targetName ->
                 if (!src || !src.exists() || !src.isFile()) {
                     return false
                 }
-                def pairKey = "${src.canonicalPath}->${targetName}"
-                if (copiedPairs.contains(pairKey)) {
-                    copiedNames.add(targetName)
-                    return false
-                }
                 def dst = new File(logDir, targetName)
-                if (!overwrite && dst.exists()) {
-                    copiedNames.add(targetName)
-                    return false
-                }
                 if (src.canonicalPath != dst.canonicalPath) {
                     dst.bytes = src.bytes
                 }
-                copiedPairs.add(pairKey)
-                copiedNames.add(targetName)
-                log.info "nextflow.config snapshot: ${src.absolutePath} -> ${dst.absolutePath}"
+                copiedName = targetName
+                copiedSourceName = src.name
+                log.debug "nextflow.config snapshot: ${src.absolutePath} -> ${dst.absolutePath}"
                 return true
             }
 
+            def chooseEffectiveConfig = { List<File> files ->
+                def existing = files.findAll { it && it.exists() && it.isFile() }
+                if (!existing) {
+                    return null
+                }
+                def dockerRunConfig = existing.find { it.name == 'run_nextflow.config' }
+                if (dockerRunConfig) {
+                    return dockerRunConfig
+                }
+                def customConfigs = existing.findAll { it.name != 'nextflow.config' }
+                if (customConfigs) {
+                    return customConfigs[-1]
+                }
+                return existing[-1]
+            }
+
+            def effectiveConfig = null
             try {
                 def configFiles = workflow.configFiles
                 if (configFiles) {
                     def configFileItems = (configFiles instanceof Collection) ? configFiles : (configFiles.getClass().isArray() ? configFiles.toList() : [configFiles])
-                    configFileItems.each { cfgPath ->
-                        def src = new File(cfgPath.toString())
-                        def srcName = src.name
-                        if (srcName in ['nextflow.config', 'run_nextflow.config']) {
-                            copyConfig(src, srcName, true)
-                        } else {
-                            copyConfig(src, srcName, true)
-                            // static_html_report.py looks for run_nextflow.config / nextflow.config.
-                            copyConfig(src, 'run_nextflow.config', true)
-                        }
-                    }
+                    effectiveConfig = chooseEffectiveConfig(configFileItems.collect { new File(it.toString()) })
                 }
             } catch (Exception ignored) {
                 log.debug "workflow.configFiles is not available in this Nextflow version"
             }
 
-            [launchDir, projectDir].each { baseDir ->
-                ['nextflow.config', 'run_nextflow.config'].each { name ->
-                    copyConfig(new File(baseDir, name), name, false)
+            if (!effectiveConfig) {
+                effectiveConfig = chooseEffectiveConfig([
+                    new File(launchDir, 'run_nextflow.config'),
+                    new File(projectDir, 'run_nextflow.config'),
+                    new File(launchDir, 'nextflow.config'),
+                    new File(projectDir, 'nextflow.config'),
+                ])
+            }
+
+            if (effectiveConfig) {
+                def targetName = (effectiveConfig.name == 'nextflow.config') ? 'nextflow.config' : 'run_nextflow.config'
+                copyConfig(effectiveConfig, targetName)
+                if (targetName == 'run_nextflow.config') {
+                    def staleDefault = new File(logDir, 'nextflow.config')
+                    if (staleDefault.exists() && staleDefault.isFile()) {
+                        staleDefault.delete()
+                    }
+                } else {
+                    def staleRunConfig = new File(logDir, 'run_nextflow.config')
+                    if (staleRunConfig.exists() && staleRunConfig.isFile()) {
+                        staleRunConfig.delete()
+                    }
                 }
             }
 
-            if (copiedNames.isEmpty()) {
+            if (!copiedName) {
                 log.warn(
-                    "nextflow.config snapshot: no nextflow.config or run_nextflow.config found under " +
+                    "nextflow.config snapshot: no effective nextflow.config or run_nextflow.config found under " +
                     "workflow.configFiles, launchDir=${launchDir.absolutePath}, or projectDir=${projectDir.absolutePath}. " +
                     "Static report will fall back to other paths if available."
                 )
+            } else {
+                def sourceSuffix = (copiedSourceName && copiedSourceName != copiedName) ? " from ${copiedSourceName}" : ""
+                log.info "nextflow.config snapshot: saved ${copiedName}${sourceSuffix} under ${logDir.absolutePath}"
             }
         }
     } catch (Exception e) {
@@ -1123,7 +1069,11 @@ workflow {
         if (cfg.megStage >= 3) {
 
         if (params.covar_type == 'epochs'){
-            cov_files = compute_covariances(params.preproc_dir,preproc_subject_paths_clean.preproc_subject_paths)
+            preproc_subject_paths_clean.preproc_subject_paths
+                .map { raw_subject_path ->
+                    tuple(raw_subject_path, raw_subject_path)
+                }
+                .set { covariance_inputs_ch }
         } else if (params.covar_type == 'raw'){
             preproc_subject_paths_clean.preproc_subject_paths
                 .map { orig_path_obj ->
@@ -1139,54 +1089,45 @@ workflow {
                 .filter { orig_path_obj, raw_data_file ->
                     new File(raw_data_file).exists()
                 }
-                .set { valid_subject_raws_ch }
-
-            cov_files = compute_covariance(params.preproc_dir, valid_subject_raws_ch)
+                .set { covariance_inputs_ch }
         } else {
             error "Unsupported covar_type: ${params.covar_type}."
         }
+
+        cov_files = compute_covariance(params.preproc_dir, covariance_inputs_ch)
 
         target_subject_id = preproc_subject_paths_clean.target_mri_subject_id
         if (fs_anatomy_output?.mri_subject_id) {
             println "fs_anatomy_output.mri_subject_id is set."
 
             core_inputs = fs_anatomy_output.mri_subject_id.combine(target_subject_id, by: 0)
-            core_inputs.view {"coregistration: ${it} "}
-
-            trans_subject_paths = coregistration(params.preproc_dir,core_inputs)
-
-            epoch_subject_id = epoch_subject_paths.meg_subject_id
-            fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
-
-            fwds = forward_solution(params.preproc_dir,
-                            params.fs_subjects_dir,
-                            fwd_inputs)
-
-            cov_subject_id = cov_files.meg_subject_id
-            source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
-
-            source_results = source_imaging(params.src_type, params.preproc_dir, source_inputs)
-
-            generate_static_html_report(source_results.source_files.collect(), run_manifest_ch, false)
-
         } else {
-                println "fs_anatomy_output.mri_subject_id is not set."
-                trans_subject_paths = coregistrations(params.preproc_dir,preproc_subject_raw,fs_anatomy_output.fs_subjects_dir)
-
-                epoch_subject_id = epoch_subject_paths.meg_subject_id
-                fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
-
-                fwds = forward_solution(params.preproc_dir,
-                                params.fs_subjects_dir,
-                                fwd_inputs)
-
-                cov_subject_id = cov_files.meg_subject_id
-                source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
-
-                source_results = source_imaging(params.src_type, params.preproc_dir, source_inputs)
-
-                generate_static_html_report(source_results.source_files.collect(), run_manifest_ch, false)
+            println "fs_anatomy_output.mri_subject_id is not set."
+            preproc_subject_raw
+                .map { raw_subject_path ->
+                    def raw_subject_basename = file(raw_subject_path).getBaseName()
+                    tuple(raw_subject_basename.split('_')[0], fs_anatomy_output.fs_subjects_dir, raw_subject_path)
+                }
+                .set { core_inputs }
         }
+
+        core_inputs.view {"coregistration: ${it} "}
+
+        trans_subject_paths = coregistration(params.preproc_dir,core_inputs)
+
+        epoch_subject_id = epoch_subject_paths.meg_subject_id
+        fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
+
+        fwds = forward_solution(params.preproc_dir,
+                        params.fs_subjects_dir,
+                        fwd_inputs)
+
+        cov_subject_id = cov_files.meg_subject_id
+        source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
+
+        source_results = source_imaging(params.src_type, params.preproc_dir, source_inputs)
+
+        generate_static_html_report(source_results.source_files.collect(), run_manifest_ch, false)
         } else if (cfg.megStage == 2) {
             generate_static_html_report(epoch_subject_paths.meg_subject_id.collect(), run_manifest_ch, false)
         } else if (cfg.megStage == 1) {

@@ -111,6 +111,7 @@ full MEG workflow with existing anatomy.
      -o, --output          Specify the output directory including report results
      -s, --steps           Pipeline mode, for example all, meg_all, anatomy, report
      -r, --view-report     Run Streamlit to view the report and do not run Nextflow
+     --static_task_log_mode failed|all-command-log|none
      --fs_license_file     Specify the FreeSurfer license file
      --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory
      --t1_dir              Specify the T1 image directory
@@ -121,3 +122,6 @@ Common ``--steps`` values are ``meg_all`` for full MEG processing with existing
 anatomy, ``all`` for anatomy plus full MEG, ``anatomy`` for structural MRI only,
 and ``report`` for static report regeneration. See
 :doc:`../reference/configuration` for all modes and modifiers.
+``--static_task_log_mode`` controls whether the static report bundles only
+failed task logs, successful ``.command.log`` files as well, or no command
+logs.

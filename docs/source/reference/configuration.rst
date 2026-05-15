@@ -62,6 +62,11 @@ overrides before launching Nextflow.
    * - ``--resume``
      - Nextflow ``-resume``
      - Reuses completed Nextflow work directory tasks where possible.
+   * - ``--static_task_log_mode``
+     - ``params.static_task_log_mode``
+     - Controls how much Nextflow ``.command*`` log content is copied into the
+       static HTML report. Values are ``failed``, ``all-command-log``, and
+       ``none``.
 
 Pipeline Stage Selection
 ------------------------
@@ -483,3 +488,25 @@ not normative or calibrated quality scores.
    * - ``epoch_reject_rate_threshold``
      - ``0.30``
      - Warn when rejected epoch fraction exceeds this value.
+
+Static Report Task Logs
+-----------------------
+
+``static_task_log_mode`` controls command-log bundling for the ``Task Details``
+and ``Task Failure Details`` sections in the static report.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Value
+     - Meaning
+   * - ``all-command-log``
+     - Default. Copy ``.command.err``, ``.command.log``, and
+       ``.command.out`` excerpts for failed or ignored tasks, and also copy
+       ``.command.log`` for successful tasks.
+   * - ``failed``
+     - Copy command logs only for failed or ignored tasks when a smaller report
+       directory is preferred.
+   * - ``none``
+     - Copy no ``.command*`` logs. Trace-derived task details remain visible.

@@ -190,6 +190,24 @@ The report also bundles a plain-text config snapshot at `static_html_report/data
 
 For `--steps report`, MEGPrep regenerates only the static report. If an earlier `megprep_run_manifest.json` exists, the report build uses it to keep the previous pipeline workflow in the diagram and marks the current run as report-only in the generated report bundle, but it restores the original `preprocessed/logs/megprep_run_manifest.json` afterward so the preprocessing provenance is not overwritten.
 
+Subject pages also read the Nextflow `trace.txt` when available. `Task Details`
+lists matched tasks in a collapsed table, while `Task Failure Details` appears
+only when a failed or ignored task is detected and includes packaged
+`.command.err`, `.command.log`, and `.command.out` excerpts. The amount of
+task log content copied into the static report is controlled by
+`static_task_log_mode`:
+
+- `all-command-log` (default): copy `.command.err`, `.command.log`, and `.command.out` for failed or ignored tasks, and also copy `.command.log` for successful tasks.
+- `failed`: copy `.command.err`, `.command.log`, and `.command.out` only for failed or ignored tasks when you want a smaller report package.
+- `none`: do not copy `.command*` logs into the static report.
+
+You can set this in `nextflow.config` or override it for a run:
+
+```bash
+nextflow run ... --static_task_log_mode all-command-log
+docker run ... cmrlab/megprep:<tag> ... --static_task_log_mode all-command-log
+```
+
 ### Cohort mode: multiple datasets under one root
 
 For a directory that contains many independent MEG datasets, use **`--cohort`**.
@@ -278,6 +296,7 @@ docker run -it --rm \
 | `-s`, `--steps` | **Nextflow (`meg_anat_pipeline_for_docker.nf`):** sets `params.steps` (e.g. `all`, `meg_all`, `anatomy`, `report`). With **Docker**, pass this **after the image name**; see [Using pipeline steps with Docker](#using-pipeline-steps-with-docker). Same semantics as [Pipeline steps](#pipeline-steps). |
 | `-r`, `--view-report` | Run Streamlit to view the report (does not run Nextflow) |
 | `--cohort` | Treat the input directory as a collection of datasets, run each child dataset separately, and generate a cohort-level static report |
+| `--static_task_log_mode` | Static report task log bundling mode: `all-command-log` (default), `failed`, or `none` |
 | `--fs_license_file` | Specify the FreeSurfer license file path |
 | `--fs_subjects_dir` | Specify the FreeSurfer `SUBJECTS_DIR` containing processed T1 results |
 | `--t1_dir` | Specify the T1 image directory |

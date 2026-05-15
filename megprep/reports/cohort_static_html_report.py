@@ -3,9 +3,9 @@
 """
 Build a static cohort-level HTML report from multiple MEGPrep dataset reports.
 
-The cohort report intentionally sits above the existing dataset-level report:
-each dataset keeps its own ``static_html_report`` bundle, while this page links
-to those reports and aggregates their headline QC counts.
+The cohort report bundles each dataset-level ``static_html_report`` package so
+the output directory can be downloaded and viewed offline without copying the
+full preprocessing outputs.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ import csv
 import html
 import json
 import os
+import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +32,9 @@ STEP_DEFS = [
     ("covariance", "Cov"),
     ("source", "Source"),
 ]
+
+STATIC_DIR = Path(__file__).resolve().parent / "_static"
+FAVICON_PATH = STATIC_DIR / "favicon.png"
 
 
 REPORT_CSS = """
@@ -218,6 +223,7 @@ document.addEventListener("DOMContentLoaded", filterDatasets);
 class DatasetReport:
     name: str
     output_root: Path
+    static_report_dir: Path
     summary_path: Path
     report_index: Path
     summary: dict[str, Any]
@@ -256,6 +262,11 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def slugify(value: Any, fallback: str = "dataset") -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip()).strip("._-")
+    return slug or fallback
+
+
 def load_json(path: Path) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         value = json.load(f)
@@ -280,6 +291,7 @@ def discover_dataset_reports(cohort_root: Path, output_dir: Path | None = None) 
             DatasetReport(
                 name=dataset_output_root.name,
                 output_root=dataset_output_root,
+                static_report_dir=static_report_dir,
                 summary_path=summary_path,
                 report_index=report_index,
                 summary=summary,
@@ -289,7 +301,65 @@ def discover_dataset_reports(cohort_root: Path, output_dir: Path | None = None) 
     return reports
 
 
-def build_cohort_summary(reports: list[DatasetReport], cohort_root: Path, output_dir: Path) -> dict[str, Any]:
+def bundle_dataset_reports(reports: list[DatasetReport], output_dir: Path) -> dict[Path, str]:
+    """Copy dataset-level static reports into the cohort package.
+
+    Returns a map from source dataset summary path to the bundled index.html path
+    relative to the cohort output directory.
+    """
+    bundled_links: dict[Path, str] = {}
+    datasets_dir = ensure_dir(output_dir / "datasets")
+    used_names: dict[str, int] = {}
+
+    for report in reports:
+        base_name = slugify(report.name)
+        used_names[base_name] = used_names.get(base_name, 0) + 1
+        dataset_dir_name = base_name if used_names[base_name] == 1 else f"{base_name}-{used_names[base_name]}"
+        dest_static_dir = datasets_dir / dataset_dir_name / "static_html_report"
+        if dest_static_dir.exists():
+            shutil.rmtree(dest_static_dir)
+        ensure_dir(dest_static_dir.parent)
+        shutil.copytree(report.static_report_dir, dest_static_dir)
+        inject_cohort_back_links(dest_static_dir, output_dir / "index.html", report.name)
+        bundled_links[report.summary_path] = os.path.relpath(dest_static_dir / "index.html", output_dir)
+
+    return bundled_links
+
+
+def write_assets(output_dir: Path) -> None:
+    assets_dir = ensure_dir(output_dir / "assets")
+    if FAVICON_PATH.exists():
+        shutil.copy2(FAVICON_PATH, assets_dir / "favicon.png")
+
+
+def inject_cohort_back_links(static_report_dir: Path, cohort_index: Path, dataset_name: str) -> None:
+    marker = "<!-- megprep-cohort-back-link -->"
+    for html_path in sorted(static_report_dir.rglob("*.html")):
+        try:
+            content = html_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if marker in content or "<body" not in content:
+            continue
+
+        rel_cohort_index = os.path.relpath(cohort_index, html_path.parent)
+        link_html = f"""
+{marker}
+<div style="position:sticky;top:12px;z-index:9999;width:min(1500px,calc(100% - 48px));margin:12px auto 0;display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid #dbe4ee;border-radius:14px;background:rgba(255,255,255,.94);box-shadow:0 10px 28px rgba(15,23,42,.08);font-family:Segoe UI,PingFang SC,Microsoft YaHei,sans-serif;font-size:14px;backdrop-filter:blur(8px);">
+  <a href="{html.escape(rel_cohort_index)}" style="color:#1f4acc;text-decoration:none;font-weight:800;">&larr; Cohort overview</a>
+  <span style="color:#667085;">{html.escape(dataset_name)}</span>
+</div>
+"""
+        updated = re.sub(r"(<body[^>]*>)", r"\1" + link_html, content, count=1, flags=re.IGNORECASE)
+        html_path.write_text(updated, encoding="utf-8")
+
+
+def build_cohort_summary(
+    reports: list[DatasetReport],
+    cohort_root: Path,
+    output_dir: Path,
+    bundled_links: dict[Path, str],
+) -> dict[str, Any]:
     total_subjects = sum(int(report.summary.get("total_subjects") or 0) for report in reports)
     pass_count = sum(int(report.summary.get("pass_count") or 0) for report in reports)
     warn_count = sum(int(report.summary.get("warn_count") or 0) for report in reports)
@@ -303,7 +373,8 @@ def build_cohort_summary(reports: list[DatasetReport], cohort_root: Path, output
 
     datasets = []
     for report in reports:
-        rel_index = os.path.relpath(report.report_index, output_dir)
+        source_rel_index = os.path.relpath(report.report_index, output_dir)
+        bundled_rel_index = bundled_links.get(report.summary_path, source_rel_index)
         summary = report.summary
         total = int(summary.get("total_subjects") or 0)
         status = "PASS"
@@ -321,7 +392,8 @@ def build_cohort_summary(reports: list[DatasetReport], cohort_root: Path, output
                 "fail_count": int(summary.get("fail_count") or 0),
                 "alarm_count": int(summary.get("alarm_count") or 0),
                 "report_root": summary.get("report_root", str(report.output_root)),
-                "report_index": rel_index,
+                "report_index": bundled_rel_index,
+                "source_report_index": source_rel_index,
                 "step_completion": summary.get("step_completion") or {},
                 "averages": summary.get("averages") or {},
             }
@@ -358,6 +430,7 @@ def write_data_files(summary: dict[str, Any], output_dir: Path) -> None:
                 "fail_count",
                 "alarm_count",
                 "report_index",
+                "source_report_index",
                 "report_root",
             ]
         )
@@ -372,6 +445,7 @@ def write_data_files(summary: dict[str, Any], output_dir: Path) -> None:
                     dataset["fail_count"],
                     dataset["alarm_count"],
                     dataset["report_index"],
+                    dataset.get("source_report_index", ""),
                     dataset["report_root"],
                 ]
             )
@@ -422,6 +496,7 @@ def build_index_html(summary: dict[str, Any], output_dir: Path) -> None:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MEGPrep Cohort Static Report</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png">
   <style>{REPORT_CSS}</style>
 </head>
 <body>
@@ -429,7 +504,7 @@ def build_index_html(summary: dict[str, Any], output_dir: Path) -> None:
     <section class="hero">
       <div class="eyebrow">MEGPrep Cohort Report</div>
       <h1>Cohort-level MEG preprocessing overview</h1>
-      <p>Aggregated static dashboard across multiple MEGPrep dataset reports.</p>
+      <p>Aggregated static dashboard across multiple bundled MEGPrep dataset reports.</p>
       <p class="mono">Cohort root: {html_text(summary['cohort_root'])}</p>
       <div class="toolbar">
         <input id="datasetSearch" type="text" placeholder="Search dataset or path" oninput="filterDatasets()">
@@ -502,7 +577,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_dir",
         default=None,
-        help="Directory to write the cohort report. Defaults to <cohort_root>/cohort_static_html_report.",
+        help="Directory to write the portable cohort report package. Defaults to <cohort_root>/cohort_static_html_report.",
     )
     return parser.parse_args()
 
@@ -511,9 +586,15 @@ def main() -> None:
     args = parse_args()
     cohort_root = Path(args.cohort_root).resolve()
     output_dir = Path(args.output_dir).resolve() if args.output_dir else cohort_root / "cohort_static_html_report"
-    ensure_dir(output_dir)
+    if output_dir == cohort_root:
+        raise ValueError("--output_dir must be separate from --cohort_root so source dataset reports are not overwritten.")
     reports = discover_dataset_reports(cohort_root, output_dir)
-    summary = build_cohort_summary(reports, cohort_root, output_dir)
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    ensure_dir(output_dir)
+    write_assets(output_dir)
+    bundled_links = bundle_dataset_reports(reports, output_dir)
+    summary = build_cohort_summary(reports, cohort_root, output_dir, bundled_links)
     write_data_files(summary, output_dir)
     build_index_html(summary, output_dir)
     print(f"Cohort static report generated at {output_dir}")

@@ -1,7 +1,7 @@
 #!/bin/bash  
 
 IMAGE_NAME=cmrlab/megprep
-VERSION="0.0.4"
+VERSION="1.0.0"
 DOCKERFILE_NAME=megprep.Dockerfile 
 
 

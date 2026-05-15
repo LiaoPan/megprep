@@ -22,6 +22,7 @@ COHORT_MODE=false
 NEXTFLOW_FILE="/program/nextflow/meg_pipeline.nf"
 STREAMLIT_APP_PATH="/program/megprep/reports/reports.py"
 COHORT_REPORT_PATH="/program/megprep/reports/cohort_static_html_report.py"
+STATIC_TASK_LOG_MODE=""
 nextflow_args=()
 
 echo "Executor:"
@@ -51,6 +52,9 @@ while [[ "$#" -gt 0 ]]; do
         # cohort mode
         --cohort) COHORT_MODE=true ;;
 
+        # static report options
+        --static_task_log_mode|--task-log-mode) STATIC_TASK_LOG_MODE="$2"; shift ;;
+
         # nextflow options
         --resume) nextflow_args+=("-resume") ;;
 
@@ -63,6 +67,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  -s, --steps           Same as Nextflow --steps / params.steps (e.g. all, meg_all, anatomy, report, meg_epochs,skip_ica)"
             echo "  -r, --view-report     Run Streamlit to view the report (does not run Nextflow)"
             echo "  --cohort              Treat --input as a directory of datasets; isolate each child's output and FreeSurfer SUBJECTS_DIR"
+            echo "  --static_task_log_mode failed|all-command-log|none"
             echo "  --fs_license_file     Specify the FreeSurfer license file"
             echo "  --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory containing processed T1 results"
             echo "  --t1_dir              Specify the T1 image directory"
@@ -111,8 +116,22 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
+read_static_task_log_mode() {
+    sed -n 's/^[[:space:]]*static_task_log_mode[[:space:]]*=[[:space:]]*["'\'']\([^"'\'']*\)["'\''].*/\1/p' "$CONFIG_FILE" | head -n 1
+}
+
+STATIC_TASK_LOG_MODE="${STATIC_TASK_LOG_MODE:-$(read_static_task_log_mode)}"
+STATIC_TASK_LOG_MODE="${STATIC_TASK_LOG_MODE:-failed}"
+case "$STATIC_TASK_LOG_MODE" in
+    failed|all-command-log|none) ;;
+    *)
+        echo "Error: invalid --static_task_log_mode '$STATIC_TASK_LOG_MODE' (expected failed, all-command-log, or none)"
+        exit 1
+        ;;
+esac
 
 echo "Using configuration file: $CONFIG_FILE"
+echo "Static report task log mode: $STATIC_TASK_LOG_MODE"
 
 write_run_config() {
     local run_input_dir="$1"
@@ -154,6 +173,9 @@ write_run_config() {
         echo "Setting t1_input_type in config to: $T1_INPUT_TYPE"
         sed -i "s|^\s*t1_input_type\s*=.*|    t1_input_type = \"$T1_INPUT_TYPE\"|" "$run_config_file"
     fi
+
+    echo "Setting static_task_log_mode in config to: $STATIC_TASK_LOG_MODE"
+    sed -i "s|^\s*static_task_log_mode\s*=.*|    static_task_log_mode = \"$STATIC_TASK_LOG_MODE\"|" "$run_config_file"
 }
 
 
@@ -196,10 +218,11 @@ run_nextflow_pipeline() {
     nextflow run "${NEXTFLOW_FILE}" \
         -c "${run_config_file}" \
         "${steps_args[@]}" \
+        --static_task_log_mode "$STATIC_TASK_LOG_MODE" \
         "${work_args[@]}" \
         -with-report "${run_output_dir}/report.html" \
         -with-timeline "${run_output_dir}/timeline.html" \
-        -with-trace \
+        -with-trace "${run_output_dir}/trace.txt" \
         "${nextflow_args[@]}"
 
     cp "$run_config_file" "${run_output_dir}/nextflow.config"
@@ -228,6 +251,45 @@ resolve_cohort_t1_dir() {
     printf "%s" "$T1_DIR"
 }
 
+steps_need_t1() {
+    local steps_value="$1"
+    local primary="${steps_value%%,*}"
+
+    case "$primary" in
+        all|anatomy)
+            return 0
+            ;;
+    esac
+
+    case ",${steps_value}," in
+        *,with_anatomy,*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+effective_steps_value() {
+    if [ -n "$STEPS" ]; then
+        printf "%s" "$STEPS"
+        return
+    fi
+    sed -n 's/^[[:space:]]*steps[[:space:]]*=[[:space:]]*["'\'']\([^"'\'']*\)["'\''].*/\1/p' "$CONFIG_FILE" | head -n 1
+}
+
+regenerate_static_report() {
+    local run_output_dir="$1"
+    if [ -d "${run_output_dir}/preprocessed" ]; then
+        python /program/megprep/reports/static_html_report.py \
+            --report_root "$run_output_dir" \
+            --output_dir "${run_output_dir}/static_html_report" \
+            --task_log_mode "$STATIC_TASK_LOG_MODE"
+    else
+        echo "Skipping static report regeneration; no preprocessed directory found at ${run_output_dir}/preprocessed"
+    fi
+}
+
 # activate Anaconda virtualenv and virtual display
 #/usr/bin/supervisord  -c /etc/supervisor/conf.d/supervisord.conf
 #Xvfb :99 -screen 0 1920x1080x24 &
@@ -249,6 +311,7 @@ if [ "$COHORT_MODE" = true ]; then
     cohort_fs_subjects_base="${FS_SUBJECTS_DIR:-/smri}"
     mkdir -p "$datasets_output_dir" "$cohort_work_dir"
     found_dataset=0
+    effective_steps="$(effective_steps_value)"
 
     for dataset_dir in "$INPUT_DIR"/*; do
         if [ ! -d "$dataset_dir" ]; then
@@ -260,11 +323,20 @@ if [ "$COHORT_MODE" = true ]; then
         dataset_output_dir="${datasets_output_dir}/${dataset_name}"
         dataset_run_config="${OUTPUT_DIR}/run_nextflow_${dataset_name}.config"
         dataset_fs_subjects_dir="${cohort_fs_subjects_base}/${dataset_name}"
-        dataset_t1_dir="$(resolve_cohort_t1_dir "$dataset_dir" "$original_dataset_name")"
+        dataset_t1_dir=""
+        if steps_need_t1 "$effective_steps"; then
+            dataset_t1_dir="$(resolve_cohort_t1_dir "$dataset_dir" "$original_dataset_name")"
+        fi
 
         echo "Cohort dataset: $dataset_name"
+        if [ -n "$dataset_t1_dir" ]; then
+            echo "T1: $dataset_t1_dir"
+        else
+            echo "T1: <not used for steps=${effective_steps:-config default}>"
+        fi
         write_run_config "$dataset_dir" "$dataset_output_dir" "$dataset_run_config" "$dataset_fs_subjects_dir" "$dataset_t1_dir"
         run_nextflow_pipeline "$dataset_run_config" "$dataset_output_dir" "${cohort_work_dir}/${dataset_name}"
+        regenerate_static_report "$dataset_output_dir"
         found_dataset=1
     done
 
@@ -283,4 +355,5 @@ fi
 
 write_run_config "$INPUT_DIR" "$OUTPUT_DIR" "$RUN_CONFIG_FILE"
 run_nextflow_pipeline "$RUN_CONFIG_FILE" "$OUTPUT_DIR" ""
+regenerate_static_report "$OUTPUT_DIR"
 chmod -R 777 /output

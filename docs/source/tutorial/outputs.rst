@@ -24,11 +24,13 @@ Top-Level Output Layout
    * - ``<output_dir>/timeline.html``
      - Nextflow timeline when run through the Docker entrypoint.
    * - ``<output_dir>/trace.txt``
-     - Nextflow process trace.
+     - Nextflow process trace. The static report uses it to populate per-subject
+       ``Task Details`` when available.
    * - ``<output_dir>/nextflow.config``
      - Effective config copied from the Docker run config.
    * - ``<output_dir>/static_html_report/``
-     - Portable MEGPrep QC report.
+     - Portable MEGPrep QC report. Depending on ``static_task_log_mode``, this
+       may include packaged Nextflow ``.command*`` log excerpts.
    * - ``<output_dir>/preprocessed/``
      - MEGPrep processing derivatives.
 

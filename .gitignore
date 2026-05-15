@@ -37,3 +37,4 @@ megprep/docs/build/
 generate_static_html.sh
 generate_static_html-smn4lang.sh
 IMPROVEMENT_ROADMAP.md
+trace-*.txt

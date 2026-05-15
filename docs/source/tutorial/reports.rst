@@ -35,6 +35,10 @@ The static report can also be regenerated without rerunning the pipeline:
 
 The report directory is self-contained and includes copied figures, sidecar
 files, JSON summaries, CSV summaries, and a config snapshot when available.
+Subject pages also include a collapsed ``Task Details`` table derived from the
+Nextflow trace file when one is available. If a task failed or was ignored, the
+page adds ``Task Failure Details`` with the error summary and packaged command
+log excerpts.
 
 .. list-table::
    :header-rows: 1
@@ -60,6 +64,46 @@ files, JSON summaries, CSV summaries, and a config snapshot when available.
      - Effective Nextflow config snapshot when MEGPrep can locate one.
    * - ``data/megprep_run_manifest.json``
      - Workflow mode and run metadata used to render the workflow diagram.
+   * - ``files/<recording>/errors/*.txt``
+     - Packaged ``.command.err``, ``.command.log``, and ``.command.out``
+       excerpts for failed or ignored tasks, when available.
+   * - ``files/<recording>/tasks/*.txt``
+     - Optional ``.command.log`` excerpts for successful tasks when
+       ``static_task_log_mode = 'all-command-log'``.
+
+Task Log Bundling
+-----------------
+
+By default, MEGPrep copies successful-task ``.command.log`` excerpts as well
+as failed-task command logs so the portable report contains fuller task
+provenance. Configure this with ``static_task_log_mode`` in the Nextflow
+config, or pass ``--static_task_log_mode`` through the Docker entrypoint or
+Nextflow command.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Value
+     - Behavior
+   * - ``all-command-log``
+     - Default. Copy ``.command.err``, ``.command.log``, and
+       ``.command.out`` excerpts for failed or ignored tasks, and also copy
+       ``.command.log`` for successful tasks.
+   * - ``failed``
+     - Copy command logs only for failed or ignored tasks when a smaller report
+       package is preferred.
+   * - ``none``
+     - Do not copy ``.command*`` logs. The report still shows trace-derived
+       task status, exit code, duration, memory, and hash values.
+
+Example:
+
+.. code-block:: bash
+
+   docker run ... cmrlab/megprep:<version> \
+     -i /input -o /output \
+     --static_task_log_mode all-command-log
 
 How to Interpret the Static Report
 ----------------------------------
@@ -77,6 +121,9 @@ Start from ``index.html``:
    topographies, and ICA overlay/PSD plots.
 6. For coregistration alarms, inspect the staged coregistration figures and
    confirm that the recording was matched to the correct MRI subject.
+7. If a subject is marked ``FAIL`` because a Nextflow task failed or was
+   ignored, open ``Task Failure Details`` first, then expand ``Task Details``
+   for the full trace context.
 
 The current report uses static thresholds and measured values. It does not yet
 include calibrated normative QC scores. See :doc:`../reference/qc_metrics` for

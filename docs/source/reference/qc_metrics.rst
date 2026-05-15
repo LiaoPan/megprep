@@ -119,7 +119,8 @@ The static report writes a dataset dashboard and machine-readable summaries:
        metrics, alarms, and links to subject pages.
    * - ``static_html_report/subjects/<recording>.html``
      - Per-recording report with artifacts, ICA, coregistration, epochs,
-       covariance, head model, source figures, and packaged sidecars.
+       covariance, head model, source figures, task trace details, and
+       packaged sidecars.
    * - ``static_html_report/alarms.html``
      - Searchable list of report alarms.
    * - ``static_html_report/data/dataset_summary.json``
@@ -134,6 +135,12 @@ The static report writes a dataset dashboard and machine-readable summaries:
    * - ``static_html_report/data/megprep_run_manifest.json``
      - Workflow mode and run metadata used to render the report workflow
        diagram.
+   * - ``static_html_report/files/<recording>/errors/*.txt``
+     - Failed or ignored task ``.command.err``, ``.command.log``, and
+       ``.command.out`` excerpts when trace/work-dir logs can be matched.
+   * - ``static_html_report/files/<recording>/tasks/*.txt``
+     - Optional successful-task ``.command.log`` excerpts when
+       ``static_task_log_mode`` is set to ``all-command-log``.
 
 Practical Review Guidance
 -------------------------

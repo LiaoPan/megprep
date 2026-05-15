@@ -51,6 +51,19 @@ STEP_DEFS = [
     ("covariance", "Cov"),
     ("source", "Source"),
 ]
+PROCESS_TO_STEP = {
+    "detect_Artifacts": "artifacts",
+    "run_ICA": "ica",
+    "run_IC_label": "ica",
+    "apply_ICA": "ica",
+    "coregistration": "coregistration",
+    "forward_solution": "headmodel",
+    "epochs": "epochs",
+    "compute_covariance": "covariance",
+    "compute_covariances": "covariance",
+    "source_imaging": "source",
+}
+SUCCESS_TRACE_STATUSES = {"COMPLETED", "CACHED", "SUBMITTED", "RUNNING"}
 
 COREG_ASSET_STEPS = (
     "coreg_initial",
@@ -1160,6 +1173,12 @@ tr.row-fail:hover td.active-sort-cell {
   font-size: 0.84rem;
 }
 
+.task-details summary {
+  cursor: pointer;
+  color: var(--accent-2);
+  font-weight: 800;
+}
+
 .info-note {
   margin-top: 10px;
   color: var(--muted);
@@ -2080,6 +2099,17 @@ def parse_args() -> argparse.Namespace:
         default="false",
         help="Whether to create a zip archive next to the output directory. true/false.",
     )
+    parser.add_argument(
+        "--task_log_mode",
+        choices=["failed", "all-command-log", "none"],
+        default="failed",
+        help=(
+            "How much Nextflow .command* log content to bundle for Task Details. "
+            "failed: copy .command.err/.command.log/.command.out only for failed or ignored tasks. "
+            "all-command-log: also copy .command.log for successful tasks. "
+            "none: do not copy .command* logs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -2220,6 +2250,190 @@ def find_subjects(preprocessed_dir: Path) -> list[str]:
     return sorted(subjects)
 
 
+def parse_trace_task_name(name: str) -> tuple[str, str | None]:
+    match = re.match(r"^(?P<process>.+?)\s+\((?P<tag>.+)\)$", name.strip())
+    if match:
+        return match.group("process").strip(), match.group("tag").strip()
+    return name.strip(), None
+
+
+def trace_task_failed(row: dict[str, str]) -> bool:
+    status = (row.get("status") or "").strip().upper()
+    exit_value = (row.get("exit") or "").strip()
+    if exit_value not in {"", "-", "0"}:
+        return True
+    return bool(status and status not in SUCCESS_TRACE_STATUSES)
+
+
+def match_task_subject(tag: str | None, subjects: list[str]) -> str | None:
+    if not tag:
+        return None
+    tag_norm = sanitize_name(tag)
+    for subject in subjects:
+        subject_norm = sanitize_name(subject)
+        if tag_norm == subject_norm or tag_norm.startswith(subject_norm) or subject_norm in tag_norm:
+            return subject
+    return None
+
+
+def find_trace_files(report_root: Path, preprocessed_dir: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for base in [report_root, report_root.parent, preprocessed_dir / "logs"]:
+        if base.exists():
+            candidates.extend(base.glob("trace*.txt"))
+            candidates.extend(base.glob("trace*.tsv"))
+    seen: set[Path] = set()
+    trace_files: list[Path] = []
+    for path in sorted(candidates):
+        resolved = path.resolve()
+        if resolved not in seen and path.is_file():
+            trace_files.append(path)
+            seen.add(resolved)
+    return trace_files
+
+
+def infer_work_roots(report_root: Path, preprocessed_dir: Path, manifest: dict[str, Any] | None) -> list[Path]:
+    roots = [
+        report_root / "work",
+        report_root.parent / "work",
+        report_root.parent.parent / "work" / report_root.name,
+        preprocessed_dir.parent / "work",
+    ]
+    params_snapshot = manifest.get("params_snapshot") if isinstance(manifest, dict) else None
+    if isinstance(params_snapshot, dict) and params_snapshot.get("output_dir"):
+        output_dir = Path(str(params_snapshot["output_dir"]))
+        roots.append(output_dir / "work")
+        roots.append(output_dir.parent.parent / "work" / output_dir.name)
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for root in roots:
+        resolved = root.resolve()
+        if resolved not in seen and root.exists():
+            result.append(root)
+            seen.add(resolved)
+    return result
+
+
+def resolve_work_dir(task_hash: str, work_roots: list[Path]) -> Path | None:
+    if "/" not in task_hash:
+        return None
+    prefix, suffix = task_hash.split("/", 1)
+    for root in work_roots:
+        parent = root / prefix
+        direct = parent / suffix
+        if direct.exists():
+            return direct
+        matches = sorted(parent.glob(f"{suffix}*")) if parent.exists() else []
+        if matches:
+            return matches[0]
+    return None
+
+
+def tail_text(path: Path, max_chars: int = 12000) -> str:
+    if not path.is_file() or path.stat().st_size == 0:
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return text[-max_chars:]
+
+
+def first_error_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if any(token in lowered for token in ["error", "exception", "traceback", "failed", "killed", "no such file"]):
+            return stripped[-500:]
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped[-500:]
+    return ""
+
+
+def task_log_names_for_mode(failed: bool, task_log_mode: str) -> list[str]:
+    if task_log_mode == "none":
+        return []
+    if failed:
+        return [".command.err", ".command.log", ".command.out"]
+    if task_log_mode == "all-command-log":
+        return [".command.log"]
+    return []
+
+
+def collect_nextflow_task_details(
+    report_root: Path,
+    preprocessed_dir: Path,
+    output_root: Path,
+    subjects: list[str],
+    manifest: dict[str, Any] | None,
+    task_log_mode: str = "failed",
+) -> dict[str, list[dict[str, Any]]]:
+    tasks_by_subject: dict[str, list[dict[str, Any]]] = {subject: [] for subject in subjects}
+    trace_files = find_trace_files(report_root, preprocessed_dir)
+    work_roots = infer_work_roots(report_root, preprocessed_dir, manifest)
+
+    for trace_file in trace_files:
+        with open(trace_file, "r", encoding="utf-8", errors="replace", newline="") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                process_name, tag = parse_trace_task_name(row.get("name", ""))
+                subject = match_task_subject(tag, subjects)
+                if subject is None:
+                    continue
+                subject_slug = sanitize_name(subject)
+                failed = trace_task_failed(row)
+                task_hash = row.get("hash", "")
+                work_dir = resolve_work_dir(task_hash, work_roots)
+                log_records = []
+                message_candidates = []
+                if work_dir:
+                    for log_name in task_log_names_for_mode(failed, task_log_mode):
+                        src = work_dir / log_name
+                        excerpt = tail_text(src)
+                        if not excerpt:
+                            continue
+                        log_category = "errors" if failed else "tasks"
+                        rel_path = copy_text_blob(
+                            excerpt,
+                            output_root,
+                            Path("files") / subject_slug / log_category / f"{sanitize_name(process_name)}_{sanitize_name(task_hash)}_{log_name[1:]}.txt",
+                        )
+                        log_records.append({"label": log_name, "path": rel_path})
+                        if failed:
+                            message = first_error_line(excerpt)
+                            if message:
+                                message_candidates.append(message)
+
+                status = row.get("status", "")
+                exit_value = row.get("exit", "")
+                message = message_candidates[0] if message_candidates else f"Task status {status or 'unknown'}, exit {exit_value or 'unknown'}."
+                tasks_by_subject[subject].append(
+                    {
+                        "process": process_name,
+                        "step": PROCESS_TO_STEP.get(process_name, "unknown"),
+                        "tag": tag,
+                        "status": status,
+                        "exit": exit_value,
+                        "hash": task_hash,
+                        "duration": row.get("duration", ""),
+                        "realtime": row.get("realtime", ""),
+                        "cpu": row.get("%cpu", ""),
+                        "peak_rss": row.get("peak_rss", ""),
+                        "peak_vmem": row.get("peak_vmem", ""),
+                        "submit": row.get("submit", ""),
+                        "trace_file": trace_file.name,
+                        "work_dir": str(work_dir) if work_dir else "",
+                        "failed": failed,
+                        "task_log_mode": task_log_mode,
+                        "message": message,
+                        "logs": log_records,
+                    }
+                )
+
+    return tasks_by_subject
+
+
 def resolve_report_dirs(report_root: Path) -> tuple[Path, Path]:
     report_root = report_root.resolve()
     direct_preprocessed = report_root / "preprocessed"
@@ -2254,14 +2468,16 @@ def _nextflow_config_source_for_bundle(
     with '//' which triggers XML parse errors when the path ends in .config).
 
     Priority: preprocessed/logs (pipeline snapshot), then dataset report root, then manifest launch_dir.
+    Within each location, run_nextflow.config is preferred because the workflow stores custom
+    or Docker-adjusted configs under that name.
     Run-details table omits covariance/source params unless manifest meg_stage >= 3.
     """
     logs_dir = preprocessed_dir / "logs"
-    for name in ("nextflow.config", "run_nextflow.config"):
+    for name in ("run_nextflow.config", "nextflow.config"):
         candidate = logs_dir / name
         if candidate.is_file():
             return candidate, f"{name} (preprocessed/logs, pipeline snapshot)"
-    for name in ("nextflow.config", "run_nextflow.config"):
+    for name in ("run_nextflow.config", "nextflow.config"):
         candidate = report_root / name
         if candidate.is_file():
             return candidate, f"{name} (dataset / report root)"
@@ -2271,7 +2487,7 @@ def _nextflow_config_source_for_bundle(
             ld = wf.get("launch_dir") or wf.get("launchDir")
             if ld:
                 base = Path(str(ld))
-                for name in ("nextflow.config", "run_nextflow.config"):
+                for name in ("run_nextflow.config", "nextflow.config"):
                     candidate = base / name
                     if candidate.is_file():
                         return candidate, f"{name} (manifest launch_dir)"
@@ -2449,6 +2665,7 @@ def collect_subject_data(
     thresholds: dict[str, float],
     *,
     qc_scope: dict[str, Any] | None = None,
+    task_details: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     preprocessed_dir = report_root / "preprocessed"
     subject_slug = sanitize_name(subject)
@@ -2473,6 +2690,8 @@ def collect_subject_data(
         "alarms": [],
         "thresholds": thresholds,
         "preproc_done": bool(raw_files),
+        "task_details": task_details or [],
+        "task_errors": [task for task in (task_details or []) if task.get("failed")],
     }
 
     # Artifacts
@@ -2698,6 +2917,18 @@ def collect_subject_data(
     alarms: list[dict[str, str]] = []
     scope = qc_scope if qc_scope is not None else qc_completeness_scope_from_manifest(None)
 
+    for task_error in summary["task_errors"]:
+        process = task_error.get("process") or "task"
+        exit_value = task_error.get("exit") or "unknown"
+        message = task_error.get("message") or "No stderr/stdout excerpt was available."
+        alarms.append(
+            {
+                "category": f"Nextflow: {process}",
+                "severity": "danger",
+                "message": f"Task failed or was ignored (exit {exit_value}): {message}",
+            }
+        )
+
     if not artifact_data["exists"]:
         alarms.append({"category": "Completeness", "severity": "warn", "message": "Artifact outputs are missing."})
     else:
@@ -2796,6 +3027,11 @@ def collect_subject_data(
         summary["status"] = "WARN"
     else:
         summary["status"] = "PASS"
+
+    for task_error in summary["task_errors"]:
+        process = task_error.get("process") or "task"
+        for log_record in task_error.get("logs", []):
+            summary["files"].append({"label": f"{process} {log_record.get('label', 'log')}", "path": log_record["path"]})
 
     subject_json_rel = copy_text_blob(
         json.dumps(summary, ensure_ascii=False, indent=2),
@@ -3130,6 +3366,78 @@ def render_bad_segment_block(rows: list[dict[str, Any]], page_size: int = 20) ->
     )
 
 
+def render_task_error_block(task_errors: list[dict[str, Any]], prefix: str = "") -> str:
+    if not task_errors:
+        return '<div class="small">No failed or ignored Nextflow tasks were found for this subject in the packaged trace files.</div>'
+    items = []
+    for error in task_errors:
+        log_links = "".join(
+            f'<a href="{html_text(prefix + log["path"])}" target="_blank">{html_text(log.get("label", "log"))}</a>'
+            for log in error.get("logs", [])
+        )
+        if not log_links:
+            log_links = '<span class="small">No command log excerpt found.</span>'
+        items.append(
+            f"""
+            <div class="alarm-item danger">
+              <div class="category">{html_text(error.get('process', 'task'))} · {html_text(error.get('status', 'unknown'))} · exit {html_text(error.get('exit', 'unknown'))}</div>
+              <div>{html_text(error.get('message', 'No error excerpt available.'))}</div>
+              <div class="small mono-path" style="margin-top:6px">work: {html_text(error.get('work_dir', 'N/A'))}</div>
+              <div class="hero-links" style="margin-top:8px">{log_links}</div>
+            </div>
+            """
+        )
+    return '<div class="alarm-list">' + "".join(items) + "</div>"
+
+
+def render_task_details_block(task_details: list[dict[str, Any]], prefix: str = "") -> str:
+    if not task_details:
+        return '<div class="small">No Nextflow task trace details were found for this subject.</div>'
+
+    rows = []
+    for task in task_details:
+        failed = bool(task.get("failed"))
+        status = task.get("status") or "unknown"
+        status_class = "danger" if failed else "good"
+        step = task.get("step") or "unknown"
+        log_links = "".join(
+            f'<a href="{html_text(prefix + log["path"])}" target="_blank">{html_text(log.get("label", "log"))}</a> '
+            for log in task.get("logs", [])
+        )
+        if not log_links:
+            log_links = '<span class="small">-</span>'
+        rows.append(
+            f"""
+            <tr>
+              <td>{html_text(task.get('process', 'task'))}<div class="small">{html_text(step)}</div></td>
+              <td><span class="pill {status_class}">{html_text(status)}</span></td>
+              <td>{html_text(task.get('exit') or '-')}</td>
+              <td>{html_text(task.get('duration') or task.get('realtime') or '-')}</td>
+              <td>{html_text(task.get('peak_rss') or '-')}</td>
+              <td class="mono-path">{html_text(task.get('hash') or '-')}</td>
+              <td>{log_links}</td>
+            </tr>
+            """
+        )
+
+    failed_count = sum(1 for task in task_details if task.get("failed"))
+    summary = f"{len(task_details)} task{'s' if len(task_details) != 1 else ''}"
+    if failed_count:
+        summary += f", {failed_count} failed/ignored"
+
+    return (
+        '<details class="task-details">'
+        f'<summary>{html_text(summary)}</summary>'
+        '<div class="scroll-box" style="margin-top:10px;max-height:360px">'
+        '<table class="detail-table">'
+        '<thead><tr><th>Process</th><th>Status</th><th>Exit</th><th>Duration</th><th>Peak RSS</th><th>Hash</th><th>Logs</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody>'
+        '</table>'
+        '</div>'
+        '</details>'
+    )
+
+
 def build_subject_html(summary: dict[str, Any], output_root: Path) -> None:
     subject = summary["subject"]
     status_html = render_status_pill(summary["status"])
@@ -3171,6 +3479,16 @@ def build_subject_html(summary: dict[str, Any], output_root: Path) -> None:
         }
         for item in summary["ica"]["topographies"]
     ]
+    task_failure_section = ""
+    if summary.get("task_errors"):
+        task_failure_section = f"""
+    <div class="section">
+      <h2>Task Failure Details</h2>
+      <div class="panel">
+        {render_task_error_block(summary.get('task_errors', []), prefix="../")}
+      </div>
+    </div>
+"""
 
     content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -3233,6 +3551,15 @@ def build_subject_html(summary: dict[str, Any], output_root: Path) -> None:
       <h2>Alarms</h2>
       <div class="panel">
         {render_alarm_items(summary['alarms'])}
+      </div>
+    </div>
+
+{task_failure_section}
+
+    <div class="section">
+      <h2>Task Details</h2>
+      <div class="panel">
+        {render_task_details_block(summary.get('task_details', []), prefix="../")}
       </div>
     </div>
 
@@ -3869,8 +4196,23 @@ def generate_static_report(args: argparse.Namespace) -> Path:
         )
     wf_ctx = load_workflow_context(report_root, preprocessed_dir)
     qc_scope = qc_completeness_scope_from_manifest(wf_ctx.get("manifest"))
+    task_details_by_subject = collect_nextflow_task_details(
+        report_root,
+        preprocessed_dir,
+        output_root,
+        subjects,
+        wf_ctx.get("manifest") if isinstance(wf_ctx.get("manifest"), dict) else None,
+        task_log_mode=args.task_log_mode,
+    )
     subject_summaries = [
-        collect_subject_data(subject, report_root, output_root, thresholds, qc_scope=qc_scope)
+        collect_subject_data(
+            subject,
+            report_root,
+            output_root,
+            thresholds,
+            qc_scope=qc_scope,
+            task_details=task_details_by_subject.get(subject, []),
+        )
         for subject in subjects
     ]
     ensure_dir(output_root / "data")
