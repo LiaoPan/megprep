@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,160 @@ from scipy.spatial.distance import cosine
 from scipy.stats import pearsonr, spearmanr
 
 mne.viz.set_browser_backend("matplotlib")
+
+
+DEVICE_ALIASES = {
+    "neuromag": "elekta",
+    "megin": "elekta",
+    "elekta": "elekta",
+    "ctf": "ctf",
+    "kit": "kit",
+    "yokogawa": "kit",
+    "4d": "4d",
+    "bti": "4d",
+    "magnes": "4d",
+    "opm": "opm",
+    "quanmag_opm": "opm",
+    "quspin_opm": "opm",
+    "quspin": "opm",
+    "fieldline": "opm",
+}
+
+AUTO_DEVICE_VALUES = {"", "none", "null", "auto", "unknown", "meg_vendor_is_unknown"}
+
+
+def normalize_device_type(device_type):
+    """Normalize MEG vendor aliases to template device names."""
+    if device_type is None:
+        return "auto"
+
+    value = str(device_type).strip().lower().replace("-", "_").replace(" ", "_")
+    if value in AUTO_DEVICE_VALUES:
+        return "auto"
+
+    for key, normalized in DEVICE_ALIASES.items():
+        if key in value:
+            return normalized
+    return value
+
+
+def available_template_device_types(save_dir="./ica_templates"):
+    """Return device types that have bundled template metadata."""
+    if not os.path.exists(save_dir):
+        return []
+
+    devices = []
+    for filename in os.listdir(save_dir):
+        if filename.startswith("template_meta_") and filename.endswith(".json"):
+            devices.append(filename[len("template_meta_") : -len(".json")])
+    return sorted(devices)
+
+
+def _normalize_match_text(value):
+    return re.sub(r"[\s_/-]+", "", str(value).lower())
+
+
+def infer_device_type_from_ica(ica, min_hits=3):
+    """Infer a template device type from ICA channel names when config uses auto."""
+    ch_names = getattr(ica, "ch_names", None)
+    if not ch_names:
+        info = getattr(ica, "info", None)
+        if hasattr(info, "get"):
+            ch_names = info.get("ch_names", [])
+        else:
+            ch_names = getattr(info, "ch_names", [])
+
+    ch_names = [re.sub(r"[\s_]+", "", str(ch_name).upper()) for ch_name in ch_names]
+    if not ch_names:
+        return None
+
+    device_patterns = {
+        "opm": (
+            re.compile(r"(?:OPM|QZFM|QZFG|FIELDLINE)"),
+            re.compile(r"^FL\d{2,}[A-Z0-9-]*$"),
+        ),
+        "elekta": (
+            re.compile(r"^MEG\d{4}$"),
+        ),
+        "ctf": (
+            re.compile(r"^M[LRZ][A-Z]{1,2}\d{2,3}(?:-\d{3,5})?$"),
+        ),
+        "kit": (
+            re.compile(r"^(?:MEG|AG)\d{3}$"),
+        ),
+        "4d": (
+            re.compile(r"^A\d{1,3}$"),
+        ),
+    }
+
+    scores = Counter()
+    for ch_name in ch_names:
+        for device_type, patterns in device_patterns.items():
+            if any(pattern.search(ch_name) for pattern in patterns):
+                scores[device_type] += 1
+                break
+
+    if not scores:
+        return None
+
+    (best_device, best_hits), *rest = scores.most_common()
+    if best_hits < min_hits:
+        return None
+
+    if rest and rest[0][1] == best_hits:
+        return None
+
+    return best_device
+
+
+def resolve_device_type_from_dataset_map(device_map, paths):
+    """Resolve a device type from a dataset-name to device-type mapping."""
+    if not isinstance(device_map, dict) or not device_map:
+        return None, None
+
+    path_values = [Path(path) for path in paths if path]
+    path_text = " ".join(str(path) for path in path_values)
+    normalized_path_text = _normalize_match_text(path_text)
+    normalized_parts = {
+        _normalize_match_text(part)
+        for path in path_values
+        for part in path.parts
+        if str(part).strip()
+    }
+
+    default_device = None
+    candidates = []
+    for dataset_name, device_type in device_map.items():
+        if str(dataset_name).strip().lower() in {"default", "*"}:
+            default_device = device_type
+            continue
+        normalized_name = _normalize_match_text(dataset_name)
+        if normalized_name:
+            candidates.append((normalized_name, dataset_name, device_type))
+
+    for normalized_name, dataset_name, device_type in sorted(candidates, key=lambda item: len(item[0]), reverse=True):
+        if normalized_name in normalized_parts or normalized_name in normalized_path_text:
+            return device_type, str(dataset_name)
+
+    if default_device is not None:
+        return default_device, "default"
+
+    return None, None
+
+
+def resolve_template_device_type(device_type, ica=None, save_dir="./ica_templates"):
+    """Resolve configured/auto device type to an available template device."""
+    requested = normalize_device_type(device_type)
+    resolved = infer_device_type_from_ica(ica) if requested == "auto" else requested
+    available = available_template_device_types(save_dir)
+
+    if not resolved:
+        return None, f"could not infer MEG vendor; available templates: {available}"
+
+    if resolved not in available:
+        return None, f"no templates for device type '{resolved}'; available templates: {available}"
+
+    return resolved, None
 
 
 # ============ Configuration Management Classes ============
@@ -895,9 +1050,12 @@ def find_ecg_eog_ics(ica_file, device_type: str = "elekta") -> Dict[str, List[in
     CORRELATION_THRESHOLD = 0.6
     MIN_VOTES = 2
     METHODS = ["pearson", "spearman", "cosine", "mean"]
-    if device_type == 'neuromag':
-        device_type = 'elekta'
     ica = mne.preprocessing.read_ica(ica_file, verbose=False)
+    device_type, skip_reason = resolve_template_device_type(device_type, ica=ica, save_dir=SAVE_DIR)
+    if device_type is None:
+        print(f"Template similarity skipped: {skip_reason}")
+        return {"ic_ecg": [], "ic_eog": []}
+
     # Load all templates for specified device
     ecg_templates, eog_templates, meta_info = load_templates(device_type=device_type, save_dir=SAVE_DIR)
 

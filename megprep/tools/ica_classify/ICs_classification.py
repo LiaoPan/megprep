@@ -914,77 +914,120 @@ def find_abnormal_psd_ics(
     return abnormal_psds_ics, psd_abnormal
 
 
-def classify_ics(ica_source_file,ica_fit_file,explained_var_file,config):
+def _config_enabled(config, key, default=True):
+    value = config.get(key, default)
+    if isinstance(value, dict):
+        return value.get("enabled", default)
+    return bool(value)
+
+
+def _kwargs_without_enabled(value):
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if key != "enabled"}
+
+
+def classify_ics(ica_source_file,ica_fit_file,explained_var_file=None,config=None):
+    config = config or {}
     ica_sources_raw = mne.io.read_raw_fif(ica_source_file, preload=True)
-    meg_vendor = config.get('meg_vendor','meg_vendor is unknown')
+    meg_vendor = config.get('meg_vendor','auto')
+    meg_vendor_by_dataset = config.get("meg_vendor_by_dataset") or config.get("meg_vendor_map") or {}
+    if isinstance(meg_vendor, dict):
+        meg_vendor_by_dataset = meg_vendor_by_dataset or meg_vendor
+        meg_vendor = meg_vendor.get("default", "auto")
+    collect_outlier_rules = bool(config.get("collect_outlier_rules", True))
     exclude_ics = []  # store all exclude ics
     exclude_ics_dict = defaultdict(list)   # store all exclude ics
 
     ## ECG ICs detection.
-    ecg_ics = find_ecg_ics(ica_sources_raw.copy(),
-                           **config.get("find_ecg_ics"),
-                           savefig=False,
-                           savefig_path='./figs_ics',
-                           verbose=False)
+    ecg_ics = []
+    try:
+        ecg_ics = find_ecg_ics(ica_sources_raw.copy(),
+                               **_kwargs_without_enabled(config.get("find_ecg_ics")),
+                               savefig=False,
+                               savefig_path='./figs_ics',
+                               verbose=False)
 
-    print("[IC_classify | First screening]ECG list:", ecg_ics)
-    brain_areas_dict = ics_topomap_distribution(ica_fit_file, ica_sources_raw.copy(), ecg_ics)
+        print("[IC_classify | First screening]ECG list:", ecg_ics)
+        brain_areas_dict = ics_topomap_distribution(ica_fit_file, ica_sources_raw.copy(), ecg_ics)
 
-    for _ic_num in ecg_ics:
-        # case 1：颞枕叶脑区能量应大于其余脑区
-        temporal_occip_power = 0
-        for brain_name in ['temporal', 'occipital']:
-            temporal_occip_power += brain_areas_dict[_ic_num][f'Left-{brain_name}'] + brain_areas_dict[_ic_num][
-                f'Right-{brain_name}']
+        for _ic_num in ecg_ics:
+            # case 1：颞枕叶脑区能量应大于其余脑区
+            temporal_occip_power = 0
+            for brain_name in ['temporal', 'occipital']:
+                temporal_occip_power += brain_areas_dict[_ic_num][f'Left-{brain_name}'] + brain_areas_dict[_ic_num][
+                    f'Right-{brain_name}']
 
-        other_power = 0
-        # for brain_name in ['Left-frontal', 'Right-frontal', 'Remaining']: //backup,old version.
-        for brain_name in ['Remaining']:
-                other_power += brain_areas_dict[_ic_num][brain_name]
+            other_power = 0
+            # for brain_name in ['Left-frontal', 'Right-frontal', 'Remaining']: //backup,old version.
+            for brain_name in ['Remaining']:
+                    other_power += brain_areas_dict[_ic_num][brain_name]
 
-        # case 2： 枕叶额叶能量大于其余脑区
-        occipital_frontal_power = 0
-        for brain_name in ['occipital', 'frontal']:
-            occipital_frontal_power += brain_areas_dict[_ic_num][f'Left-{brain_name}'] + brain_areas_dict[_ic_num][
-                f'Right-{brain_name}']
+            # case 2： 枕叶额叶能量大于其余脑区
+            occipital_frontal_power = 0
+            for brain_name in ['occipital', 'frontal']:
+                occipital_frontal_power += brain_areas_dict[_ic_num][f'Left-{brain_name}'] + brain_areas_dict[_ic_num][
+                    f'Right-{brain_name}']
 
-        other_power_2 = 0
-        for brain_name in ['Remaining']: # oldversion: 'Left-temporal', 'Right-temporal','Remaining'
-            other_power_2 += brain_areas_dict[_ic_num][brain_name]
+            other_power_2 = 0
+            for brain_name in ['Remaining']: # oldversion: 'Left-temporal', 'Right-temporal','Remaining'
+                other_power_2 += brain_areas_dict[_ic_num][brain_name]
 
-        # case 1：颞枕叶脑区能量应大于其余脑区 or case 2： 枕叶额叶能量大于其余脑区
-        print("brain_areas_dict：",brain_areas_dict)
-        print(f"IC_num:{_ic_num}  temporal_occip_power:{temporal_occip_power}__other_power_brain:{other_power}")
-        print(f"IC_num:{_ic_num}  fontal_occip_power:{occipital_frontal_power}__other_power_brain:{other_power_2}")
-        if (temporal_occip_power > other_power) or (occipital_frontal_power > other_power_2):
-            exclude_ics.append(_ic_num)
+            # case 1：颞枕叶脑区能量应大于其余脑区 or case 2： 枕叶额叶能量大于其余脑区
+            print("brain_areas_dict：",brain_areas_dict)
+            print(f"IC_num:{_ic_num}  temporal_occip_power:{temporal_occip_power}__other_power_brain:{other_power}")
+            print(f"IC_num:{_ic_num}  fontal_occip_power:{occipital_frontal_power}__other_power_brain:{other_power_2}")
+            if (temporal_occip_power > other_power) or (occipital_frontal_power > other_power_2):
+                exclude_ics.append(_ic_num)
+    except Exception as e:
+        print("ECG rules error:", e)
 
     print("[IC_classify]ECG abnormal list:", exclude_ics)
     exclude_ics_dict['ic_ecg'].extend(exclude_ics)
 
     # 根据explained var的值来判断，纳入异常ICs
     exp_var_ics = []
-    if os.path.exists(explained_var_file):
-        explained_var_threshold = config['explained_var'].get('threshold',0.1)  # 即解释值应小于10%的解释程度，才归纳为正常值。| 调高阈值为10%
-        explained_var_list = jl.load(explained_var_file)
-        for ic_num, explained_var in enumerate(explained_var_list):
-            # for ch_type,value in explained_var.items():
-            ch_type = config['explained_var'].get('ch_type','mag')
-            value = explained_var[ch_type]
-            if value > explained_var_threshold:
-                exclude_ics.append(ic_num)
-                exp_var_ics.append(ic_num)
-                print(f"Explained Var Threshold:{explained_var_threshold} < {value:.4f}-Ic_num:", ic_num)
+    explained_var_config = config.get('explained_var') or {}
+    if (
+        collect_outlier_rules
+        and explained_var_config.get("enabled", True)
+        and explained_var_file
+        and os.path.exists(explained_var_file)
+    ):
+        try:
+            explained_var_threshold = explained_var_config.get('threshold',0.1)  # 即解释值应小于10%的解释程度，才归纳为正常值。| 调高阈值为10%
+            explained_var_list = jl.load(explained_var_file)
+            for ic_num, explained_var in enumerate(explained_var_list):
+                ch_type = explained_var_config.get('ch_type','mag')
+                value = explained_var.get(ch_type) if isinstance(explained_var, dict) else None
+                if value is None:
+                    continue
+                if value > explained_var_threshold:
+                    exclude_ics.append(ic_num)
+                    exp_var_ics.append(ic_num)
+                    print(f"Explained Var Threshold:{explained_var_threshold} < {value:.4f}-Ic_num:", ic_num)
+        except Exception as e:
+            print("Explained variance rules error:", e)
     else:
-        print(f"{explained_var_file} is not exists.")
+        print(f"Explained variance outlier rules skipped; disabled, not requested, or file is missing: {explained_var_file}")
 
     exclude_ics_dict['ic_outlier'].extend(exp_var_ics)
 
     # PSD来判断EOG等异常成分
-    abnormal_psd_ics, lowfreqHz_ics = find_abnormal_psd_ics(ica_sources_raw, **config.get("find_abnormal_psd_ics",{}))
-    print("[IC_classify]abnormal_psd_ics:", abnormal_psd_ics)
-    exclude_ics.extend(abnormal_psd_ics)
-    exclude_ics_dict['ic_outlier'].extend(abnormal_psd_ics)
+    abnormal_psd_ics = []
+    lowfreqHz_ics = []
+    if _config_enabled(config, "find_abnormal_psd_ics", True):
+        try:
+            abnormal_psd_ics, lowfreqHz_ics = find_abnormal_psd_ics(ica_sources_raw, **_kwargs_without_enabled(config.get("find_abnormal_psd_ics")))
+            print("[IC_classify]low_freq_psd_ics:", lowfreqHz_ics)
+            if collect_outlier_rules:
+                print("[IC_classify]abnormal_psd_ics:", abnormal_psd_ics)
+                exclude_ics.extend(abnormal_psd_ics)
+                exclude_ics_dict['ic_outlier'].extend(abnormal_psd_ics)
+            else:
+                print("[IC_classify]PSD outlier collection skipped because ic_outlier is disabled.")
+        except Exception as e:
+            print("PSD rules error:", e)
 
     # EOG # 双侧额颞能量高、且psd小于10Hz高占比
     try:
@@ -1011,7 +1054,14 @@ def classify_ics(ica_source_file,ica_fit_file,explained_var_file,config):
 
     # Newly: TopoMap Template Similarity of ECG&EOG.
     try:
-        from .ICs_template_similarity import find_ecg_eog_ics
+        from .ICs_template_similarity import find_ecg_eog_ics, resolve_device_type_from_dataset_map
+        mapped_vendor, matched_dataset = resolve_device_type_from_dataset_map(
+            meg_vendor_by_dataset,
+            [ica_fit_file, ica_source_file],
+        )
+        if mapped_vendor is not None:
+            meg_vendor = mapped_vendor
+            print(f"Template similarity MEG vendor from dataset map ({matched_dataset}): {meg_vendor}")
         ecg_eog_dict = find_ecg_eog_ics(ica_fit_file, device_type=meg_vendor)
         print("ECG&EOG Template Similarity Exclude ICs:", ecg_eog_dict)
         exclude_ics_dict["ic_eog"].extend(ecg_eog_dict["ic_eog"])

@@ -1069,6 +1069,10 @@ tr.row-fail:hover td.active-sort-cell {
   background: linear-gradient(180deg, #fffaf2, #fbfdff 22%);
 }
 
+.figure.wide {
+  grid-column: 1 / -1;
+}
+
 .figure-badge {
   position: absolute;
   top: 12px;
@@ -2611,16 +2615,22 @@ def parse_ica_topographies(ica_results_dir: Path) -> list[dict[str, Any]]:
     topo_files = []
     if not ica_results_dir.exists():
         return topo_files
-    pattern = re.compile(r"(?P<component>\d+)_evar_(?P<evar>-?\d+\.?\d*)")
+    evar_pattern = re.compile(r"^(?P<component>\d+)_evar_(?P<evar>-?\d+\.?\d*)$")
+    plain_pattern = re.compile(r"^(?P<component>\d+)$")
     for file_path in ica_results_dir.glob("*.png"):
-        match = pattern.search(file_path.stem)
+        match = evar_pattern.search(file_path.stem)
+        explained_var = None
+        if match:
+            explained_var = float(match.group("evar"))
+        else:
+            match = plain_pattern.search(file_path.stem)
         if not match:
             continue
         topo_files.append(
             {
                 "path": file_path,
                 "component": int(match.group("component")),
-                "explained_var": float(match.group("evar")),
+                "explained_var": explained_var,
             }
         )
     topo_files.sort(key=lambda item: item["component"])
@@ -2740,6 +2750,19 @@ def collect_subject_data(
         except Exception as exc:
             artifact_data["error"] = str(exc)
 
+    heatmap_file = artifact_dir / "check_imgs" / "artifact_mask_heatmap.png"
+    if heatmap_file.is_file():
+        rel = copy_asset(heatmap_file, output_root, subject_slug, "artifacts")
+        artifact_data["assets"].append(
+            {
+                "title": "Artifact mask heatmap",
+                "rel_path": rel,
+                "category": "Artifacts",
+                "figure_class": "wide",
+                "badge": {"text": "Bad channel / bad segment mask", "class": "warn"},
+            }
+        )
+
     selected_artifact_images = select_artifact_images(artifact_dir)
     for label, file_paths in selected_artifact_images.items():
         for idx, file_path in enumerate(file_paths, start=1):
@@ -2799,7 +2822,14 @@ def collect_subject_data(
     marked_set = set(ica_data["marked_components"])
     marked_topos = [item for item in topo_files if item["component"] in marked_set]
     remaining_topos = [item for item in topo_files if item["component"] not in marked_set]
-    remaining_topos.sort(key=lambda item: item["explained_var"], reverse=True)
+    remaining_topos.sort(
+        key=lambda item: (
+            item["explained_var"] is not None,
+            item["explained_var"] if item["explained_var"] is not None else -1.0,
+            -item["component"],
+        ),
+        reverse=True,
+    )
     selected_topos = marked_topos[:6]
     for topo in remaining_topos:
         if len(selected_topos) >= 6:
@@ -3465,9 +3495,11 @@ def build_subject_html(summary: dict[str, Any], output_root: Path) -> None:
     ica_topography_assets = [
         {
             "title": (
-                f"Marked abnormal IC {item['component']} | EVAR {fmt_float(item['explained_var'], 3)}"
+                f"Marked abnormal IC {item['component']}"
+                + (f" | EVAR {fmt_float(item['explained_var'], 3)}" if item.get("explained_var") is not None else "")
                 if item["component"] in marked_component_set
-                else f"Reference IC {item['component']} | EVAR {fmt_float(item['explained_var'], 3)}"
+                else f"Reference IC {item['component']}"
+                + (f" | EVAR {fmt_float(item['explained_var'], 3)}" if item.get("explained_var") is not None else "")
             ),
             "rel_path": item["rel_path"],
             "figure_class": "flagged" if item["component"] in marked_component_set else "",

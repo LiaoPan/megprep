@@ -15,6 +15,13 @@ import mne
 import argparse
 import yaml
 import logging
+import numpy as np
+import matplotlib as mpl
+
+mpl.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.patches import Patch
 from pathlib import Path
 from osl_ephys.preprocessing.osl_wrappers import detect_badchannels, detect_badsegments
 # from tools.osl.osl_wrappers import detect_badchannels, detect_badsegments
@@ -28,6 +35,157 @@ set_random_seed(2025)
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _is_bad_annotation(description):
+    return "bad" in str(description).lower()
+
+
+def _annotation_to_sample_bounds(raw, onset, duration):
+    try:
+        start_sample, stop_sample = raw.time_as_index(
+            [float(onset), float(onset) + float(duration)],
+            use_rounding=True,
+        )
+    except Exception:
+        sfreq = float(raw.info.get("sfreq", 1.0) or 1.0)
+        start_sample = int(round(float(onset) * sfreq))
+        stop_sample = int(round((float(onset) + float(duration)) * sfreq))
+
+    start_sample = max(0, min(int(start_sample), raw.n_times))
+    stop_sample = max(0, min(int(stop_sample), raw.n_times))
+    if stop_sample <= start_sample and duration > 0:
+        stop_sample = min(raw.n_times, start_sample + 1)
+    return start_sample, stop_sample
+
+
+def plot_artifact_mask_heatmap(raw, bad_channels, output_path, max_time_bins=2400):
+    """Plot a compact mask of bad channels and bad time spans."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    picks = mne.pick_types(raw.info, meg=True, eeg=False, eog=False, stim=False, exclude=[])
+    if len(picks) == 0:
+        picks = mne.pick_types(raw.info, meg=False, eeg=True, eog=False, stim=False, exclude=[])
+    if len(picks) == 0:
+        excluded_types = {"stim", "eog", "ecg", "emg", "misc", "resp", "chpi", "ias", "syst", "exci"}
+        picks = np.array(
+            [
+                idx
+                for idx, channel_type in enumerate(raw.get_channel_types())
+                if channel_type not in excluded_types
+            ],
+            dtype=int,
+        )
+    if len(picks) == 0 or raw.n_times <= 0:
+        logger.warning("Skipping artifact mask heatmap because no plottable data channels were found.")
+        return
+
+    channel_names = [raw.ch_names[pick] for pick in picks]
+    bad_channel_set = set(bad_channels or [])
+    bad_channel_rows = np.array([name in bad_channel_set for name in channel_names], dtype=bool)
+    n_channels = len(channel_names)
+    n_bins = int(min(max_time_bins, max(240, min(raw.n_times, n_channels * 10))))
+    n_bins = max(1, n_bins)
+    mask = np.zeros((n_channels, n_bins), dtype=np.uint8)
+
+    bad_segment_count = 0
+    bad_segment_duration = 0.0
+    for annotation in raw.annotations:
+        if not _is_bad_annotation(annotation["description"]):
+            continue
+        start_sample, stop_sample = _annotation_to_sample_bounds(raw, annotation["onset"], annotation["duration"])
+        if stop_sample <= start_sample:
+            continue
+        start_bin = int(np.floor(start_sample / raw.n_times * n_bins))
+        stop_bin = int(np.ceil(stop_sample / raw.n_times * n_bins))
+        start_bin = max(0, min(start_bin, n_bins - 1))
+        stop_bin = max(start_bin + 1, min(stop_bin, n_bins))
+        mask[:, start_bin:stop_bin] = np.maximum(mask[:, start_bin:stop_bin], 1)
+        bad_segment_count += 1
+        bad_segment_duration += float(annotation["duration"])
+
+    if bad_channel_rows.any():
+        mask[bad_channel_rows, :] = np.where(mask[bad_channel_rows, :] == 1, 3, 2)
+
+    duration_sec = float(raw.n_times / (raw.info.get("sfreq", 1.0) or 1.0))
+    time_scale = 60.0 if duration_sec >= 120 else 1.0
+    time_label = "Time (min)" if time_scale == 60.0 else "Time (s)"
+    extent = [0, duration_sec / time_scale, -0.5, n_channels - 0.5]
+    x_values = np.linspace(0, duration_sec / time_scale, n_bins)
+
+    cmap = ListedColormap(["#f8fafc", "#ef4444", "#2563eb", "#7e22ce"])
+    norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap.N)
+    figure_height = max(5.0, min(10.5, 3.2 + n_channels * 0.035))
+    fig = plt.figure(figsize=(13.5, figure_height), dpi=180)
+    grid = fig.add_gridspec(
+        2,
+        2,
+        width_ratios=(24, 4),
+        height_ratios=(3, 16),
+        hspace=0.06,
+        wspace=0.04,
+    )
+    ax_top = fig.add_subplot(grid[0, 0])
+    ax_heatmap = fig.add_subplot(grid[1, 0], sharex=ax_top)
+    ax_side = fig.add_subplot(grid[1, 1], sharey=ax_heatmap)
+
+    segment_fraction = np.isin(mask, [1, 3]).mean(axis=0) * 100.0
+    ax_top.fill_between(x_values, segment_fraction, color="#ef4444", alpha=0.20, linewidth=0)
+    ax_top.plot(x_values, segment_fraction, color="#dc2626", linewidth=1.2)
+    ax_top.set_ylabel("Bad span\ncoverage (%)", fontsize=8, color="#475467")
+    ax_top.tick_params(axis="x", labelbottom=False)
+    ax_top.tick_params(axis="y", labelsize=8, colors="#667085")
+    ax_top.grid(axis="y", color="#e5e7eb", linewidth=0.8)
+    ax_top.spines[["top", "right"]].set_visible(False)
+
+    ax_heatmap.imshow(mask, aspect="auto", interpolation="nearest", origin="lower", cmap=cmap, norm=norm, extent=extent)
+    ax_heatmap.set_xlabel(time_label, fontsize=10)
+    ax_heatmap.set_ylabel("Channels", fontsize=10)
+    max_y_ticks = 18
+    if n_channels <= max_y_ticks:
+        tick_idx = np.arange(n_channels)
+    else:
+        tick_idx = np.unique(np.linspace(0, n_channels - 1, max_y_ticks).astype(int))
+    ax_heatmap.set_yticks(tick_idx)
+    ax_heatmap.set_yticklabels([channel_names[idx] for idx in tick_idx], fontsize=7)
+    ax_heatmap.tick_params(axis="x", labelsize=8)
+    ax_heatmap.spines[["top", "right"]].set_visible(False)
+
+    channel_segment_fraction = np.isin(mask, [1, 3]).mean(axis=1) * 100.0
+    side_colors = np.where(bad_channel_rows, "#2563eb", "#ef4444")
+    ax_side.barh(np.arange(n_channels), channel_segment_fraction, color=side_colors, alpha=0.78, height=0.82)
+    ax_side.set_xlabel("Bad\nspan (%)", fontsize=8, color="#475467")
+    ax_side.tick_params(axis="x", labelsize=8, colors="#667085")
+    ax_side.tick_params(axis="y", left=False, labelleft=False)
+    ax_side.grid(axis="x", color="#e5e7eb", linewidth=0.8)
+    ax_side.spines[["top", "right", "left"]].set_visible(False)
+
+    legend_handles = [
+        Patch(facecolor="#f8fafc", edgecolor="#cbd5e1", label="Clean"),
+        Patch(facecolor="#ef4444", label="Bad segment"),
+        Patch(facecolor="#2563eb", label="Bad channel"),
+        Patch(facecolor="#7e22ce", label="Bad channel + segment"),
+    ]
+    title = "Artifact mask heatmap"
+    subtitle = (
+        f"{n_channels} channels | {int(bad_channel_rows.sum())} bad channels | "
+        f"{bad_segment_count} bad segments | {bad_segment_duration:.1f}s marked bad"
+    )
+    fig.suptitle(title, x=0.08, y=0.995, ha="left", fontsize=14, fontweight="bold", color="#111827")
+    fig.text(0.08, 0.955, subtitle, ha="left", va="top", fontsize=9, color="#667085")
+    fig.legend(
+        handles=legend_handles,
+        loc="upper right",
+        bbox_to_anchor=(0.98, 0.995),
+        ncol=2,
+        frameon=False,
+        fontsize=8,
+    )
+    fig.patch.set_facecolor("white")
+    fig.savefig(output_path, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    logger.info(f"Artifact mask heatmap saved to {output_path}")
 
 def find_bad_channels(raw,config):
     """Detect bad channels using multiple methods."""
@@ -192,14 +350,26 @@ def main(args):
         except Exception as e:
             logger.error(f"Error overwriting:{args.input}...,\n {e}")
 
-        # Generate artifacts check images.
+        check_imgs_output_dir = Path(output_bad_channels_file).parent / "check_imgs"
+        heatmap_img_out = Path(f"{check_imgs_output_dir}/artifact_mask_heatmap.png")
+        try:
+            logger.info("Generating artifact mask heatmap...")
+            plot_artifact_mask_heatmap(
+                raw=raw,
+                bad_channels=bad_channels,
+                output_path=heatmap_img_out,
+            )
+        except Exception as e:
+            logger.error(f"Error generating artifact mask heatmap: {e}")
+
+        # Generate detailed artifacts check images.
         if config.get('artifact_images_enabled',True):
             device_type = config.get('meg_vendor','')
-            check_imgs_output_dir = Path(output_bad_channels_file).parent / "check_imgs"
             seg_fname_img_out = Path(f"{check_imgs_output_dir}/waveform/chn.#/seg_$.jpg")
             seg_fname_chn_out = Path(f"{check_imgs_output_dir}/waveform/channels.jl")
             summary_fname_img_out = Path(f"{check_imgs_output_dir}/overview/chn.#/seg_$.jpg")
             summary_fname_chn_out = Path(f"{check_imgs_output_dir}/overview/channels.jl")
+
             try:
                 logger.info("Generating summary anv waveform...")
                 # plot segments

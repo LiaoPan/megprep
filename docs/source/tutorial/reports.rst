@@ -116,6 +116,8 @@ Start from ``index.html``:
    distance, or epoch rejection rate.
 3. Open subject pages for recordings marked ``WARN`` or ``FAIL``.
 4. For artifact alarms, inspect the bad-channel list, bad-segment table, and
+   artifact mask heatmap. The heatmap summarizes where bad channels and bad
+   time segments occur across the recording before opening the more detailed
    waveform images.
 5. For ICA alarms, inspect marked components, ECG/EOG candidates, component
    topographies, and ICA overlay/PSD plots.

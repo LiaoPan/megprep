@@ -46,9 +46,11 @@ Subject-Level Metrics
    * - ECG and EOG candidates
      - ``ica_report/<recording>/ecg_eog_scores.json``
      - Candidate artifact components detected by ECG/EOG scoring.
-   * - ICA explained variance views
+   * - ICA component review views
      - ``ica_report/<recording>/ica_results/*.png``
-     - Topographic and time-series evidence for component review.
+     - Topographic and time-series evidence for component review. If
+       ``ica_compute_explained_variance`` is enabled, topography filenames and
+       report captions include EVAR values; otherwise EVAR is omitted.
    * - Coregistration mean, max, and min distance
      - ``trans/<recording>/dists.csv``
      - Distances in mm between fitted head-shape points and the head surface.
@@ -121,6 +123,9 @@ The static report writes a dataset dashboard and machine-readable summaries:
      - Per-recording report with artifacts, ICA, coregistration, epochs,
        covariance, head model, source figures, task trace details, and
        packaged sidecars.
+   * - ``static_html_report/files/<recording>/artifacts/artifact_mask_heatmap.png``
+     - Artifact mask heatmap showing bad-channel rows and bad-segment time
+       spans when artifact image generation is enabled.
    * - ``static_html_report/alarms.html``
      - Searchable list of report alarms.
    * - ``static_html_report/data/dataset_summary.json``

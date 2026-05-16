@@ -38,7 +38,57 @@ def calculate_flat_ratio(signal, threshold=0):
             flat_count += 1  
 
     flat_ratio = flat_count / total_count  
-    return flat_ratio  
+    return flat_ratio
+
+
+def unique_ints(values, max_value=None):
+    result = []
+    for value in values or []:
+        try:
+            idx = int(value)
+        except Exception:
+            continue
+        if idx < 0:
+            continue
+        if max_value is not None and idx >= max_value:
+            continue
+        if idx not in result:
+            result.append(idx)
+    return result
+
+
+def append_component_score(scores_dict, kind, component_idx, score=0.5):
+    index_key = f"{kind}_indices"
+    if component_idx in scores_dict[index_key]:
+        return
+    scores_dict[index_key].append(int(component_idx))
+    scores_dict[kind].append(float(score))
+
+
+def normalize_score_dict(scores_dict, n_components=None):
+    normalized = defaultdict(list)
+    for kind in ["ecg", "eog"]:
+        indices = scores_dict.get(f"{kind}_indices", [])
+        scores = scores_dict.get(kind, [])
+        for pos, component_idx in enumerate(indices):
+            try:
+                idx = int(component_idx)
+            except Exception:
+                continue
+            if idx < 0 or (n_components is not None and idx >= n_components):
+                continue
+            if idx in normalized[f"{kind}_indices"]:
+                continue
+            normalized[f"{kind}_indices"].append(idx)
+            try:
+                score = float(scores[pos])
+            except Exception:
+                score = 0.5
+            normalized[kind].append(score)
+    for key, values in scores_dict.items():
+        if key not in normalized:
+            normalized[key] = values
+    return normalized
 
 
 def main():
@@ -126,6 +176,7 @@ def main():
         scores_dict = defaultdict(list, scores_dict)
         # Load the ICA file
         ica = mne.preprocessing.read_ica(args.ica_file)
+        n_components = int(ica.n_components_)
 
         if config.get('mne_algorithm',True):
             # mne-python
@@ -152,8 +203,8 @@ def main():
                         mne_ic_labels['labels'].extend(['EOG']*len(eog_indices))
                         mne_ic_labels['y_pred_proba'].extend(eog_scores[eog_indices])
                         ic_eog.extend(eog_indices)
-                        scores_dict['eog'].extend(eog_scores[eog_indices])
-                        scores_dict['eog_indices'].extend(eog_indices)
+                        for component_idx in eog_indices:
+                            append_component_score(scores_dict, "eog", component_idx, eog_scores[component_idx])
             except Exception as e:
                 logging.error(f"[MNE-Python] Error:{e}")
 
@@ -174,8 +225,8 @@ def main():
                 mne_ic_labels['labels'].extend(['ECG'] * len(ecg_indices))
                 mne_ic_labels['y_pred_proba'].extend(ecg_scores[ecg_indices])
                 ic_ecg.extend(ecg_indices)
-                scores_dict["ecg"].extend(ecg_scores[ecg_indices].tolist())
-                scores_dict["ecg_indices"].extend(ecg_indices)
+                for component_idx in ecg_indices:
+                    append_component_score(scores_dict, "ecg", component_idx, ecg_scores[component_idx])
             except Exception as e:
                 logging.error(e)
 
@@ -202,17 +253,22 @@ def main():
                 ica_root_dir = Path(args.ica_file).parent
                 ica_source_file = ica_root_dir / "ica_sources.fif"
                 explained_var_file = ica_root_dir / "ica_explained_var.jl"
-                marked_ics,marked_ics_dict = classify_ics(ica_source_file,ica_fit_file,explained_var_file,config.get("ICA_classify",{}))
+                ica_classify_config = dict(config.get("ICA_classify",{}) or {})
+                ica_classify_config["collect_outlier_rules"] = bool(config.get("ic_outlier"))
+                marked_ics,marked_ics_dict = classify_ics(ica_source_file,ica_fit_file,explained_var_file,ica_classify_config)
                 # double check.
-                ic_ecg.extend(marked_ics_dict['ic_ecg'])
-                ic_eog.extend(marked_ics_dict['ic_eog'])
-                ic_outlier.extend(marked_ics_dict['ic_outlier'])
-                scores_dict['ecg_indices'].extend(ic_ecg)
-                scores_dict['eog_indices'].extend(ic_eog)
-                scores_dict["ecg"].extend([0.5] * len(ic_ecg))  # unkown
-                scores_dict["eog"].extend([0.5] * len(ic_eog))  # unkown
+                rule_ecg = unique_ints(marked_ics_dict.get('ic_ecg', []), n_components)
+                rule_eog = unique_ints(marked_ics_dict.get('ic_eog', []), n_components)
+                rule_outlier = unique_ints(marked_ics_dict.get('ic_outlier', []), n_components)
+                ic_ecg.extend(rule_ecg)
+                ic_eog.extend(rule_eog)
+                ic_outlier.extend(rule_outlier)
+                for component_idx in rule_ecg:
+                    append_component_score(scores_dict, "ecg", component_idx, 0.5)  # rule-based score placeholder
+                for component_idx in rule_eog:
+                    append_component_score(scores_dict, "eog", component_idx, 0.5)  # rule-based score placeholder
                 if config.get("ic_outlier"):
-                    scores_dict['ic_outlier'].extend(ic_outlier)
+                    scores_dict['ic_outlier'].extend(rule_outlier)
 
                 print("ic_ecg:",ic_ecg)
                 print("ic_eog:",ic_eog)
@@ -231,20 +287,19 @@ def main():
             _ic_list = []
             for idx, ic_l in enumerate(ic_labels["labels"]):
                 if "heart beat" == ic_l and (idx not in scores_dict["ecg_indices"]):
-                    scores_dict["ecg"].append(ic_labels["y_pred_proba"][idx])
-                    scores_dict["ecg_indices"].append(idx)
+                    append_component_score(scores_dict, "ecg", idx, ic_labels["y_pred_proba"][idx])
                     ic_ecg.append(idx)
                     _ic_list.append(idx)
                 elif (("eye blink" == ic_l) or ("eye movement" == ic_l)) and (idx not in scores_dict["eog_indices"]):
-                    scores_dict["eog"].append(ic_labels["y_pred_proba"][idx])
-                    scores_dict["eog_indices"].append(idx)
+                    append_component_score(scores_dict, "eog", idx, ic_labels["y_pred_proba"][idx])
                     ic_eog.append(idx)
                     _ic_list.append(idx)
             print("[MNE-ICLabel] Component labels:", _ic_list)
 
 
         output_file = os.path.join(args.output_dir, raw_basename, "ecg_eog_scores.json")
-        pd.Series(scores_dict).to_json(
+        scores_dict = normalize_score_dict(scores_dict, n_components)
+        pd.Series(dict(scores_dict)).to_json(
             output_file,
             orient="index",
             indent=4,
@@ -263,7 +318,7 @@ def main():
 
         # exclude_idx.extend(mne_ic_labels['index'])
         # exclude_idx.extend(marked_ics)
-        exclude_idx = sorted(list(set(exclude_idx)))
+        exclude_idx = sorted(unique_ints(exclude_idx, n_components))
         print(f"run_ica_label - Exclude ICs:{exclude_idx}")
 
         with open(artifact_ic_output_file, "w") as f:

@@ -323,7 +323,7 @@ process run_ICA {
 
     output:
     path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/ica_results/*.png"
-    path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/ica_explained_var.jl",emit:ica_expvars
+    path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/ica_explained_var.jl", optional: true, emit:ica_expvars
     path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/ica_sources.fif",emit: ica_sources
     path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/*_ica.fif",emit: ica_fif_paths
     val "${raw_subject_path}",emit: preproc_subject_paths
@@ -332,6 +332,7 @@ process run_ICA {
     script_name = "${params.code_dir}/run_ica.py"
     raw_subject_basename = file(raw_subject_path).getBaseName()
     raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
+    compute_explained_variance = params.ica_compute_explained_variance ?: false
     """
     mkdir -p ica_report
     python ${script_name} \\
@@ -340,7 +341,8 @@ process run_ICA {
         --num_IC ${params.num_IC} \\
         --fname_bad_channels ${bad_channels} \\
         --fname_bad_segments ${bad_segments} \\
-        --seed ${params.ICA_random_seed}
+        --seed ${params.ICA_random_seed} \\
+        --compute_explained_variance ${compute_explained_variance}
     """
 }
 
@@ -353,7 +355,6 @@ process run_IC_label {
     val raw_subject_path
     path ica_file_path
     path ica_source
-    path ica_expvar
 
     output:
     path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/marked_components.txt",emit:marked_components
@@ -1024,8 +1025,7 @@ workflow {
        preproc_subject_paths_ica_label = run_IC_label(params.preproc_dir,
                                             preproc_subject_paths_ica.preproc_subject_paths,
                                             preproc_subject_paths_ica.ica_fif_paths,
-                                            preproc_subject_paths_ica.ica_sources,
-                                            preproc_subject_paths_ica.ica_expvars)
+                                            preproc_subject_paths_ica.ica_sources)
 
        preproc_subject_paths_clean = apply_ICA(params.preproc_dir,
                                             preproc_subject_paths_ica_label.preproc_subject_paths,

@@ -146,6 +146,13 @@ The file [`nextflow/meg_anat_pipeline_for_docker.nf`](nextflow/meg_anat_pipeline
 
 **Note:** `do_fs` and `do_only_anatomy` are legacy switches. The Nextflow workflow is now driven by **`steps`**; use `--steps anatomy`, `--steps all`, or `--steps meg_all` instead of editing those legacy flags.
 
+ICA per-component explained variance is optional and disabled by default:
+set `ica_compute_explained_variance = true` in the Nextflow config, or pass
+`--ica_compute_explained_variance true`, when you want EVAR values in ICA
+figure filenames and report captions. When disabled, ICA fitting, labeling,
+interactive review, and static reports still work; EVAR-dependent rule checks
+are skipped.
+
 #### Basic preprocessing
 
 The table above uses **basic preprocessing** for the first MEG-only signal steps (after import). They are defined in **`params.preproc_config`**; the repository default in [`nextflow/nextflow.config`](nextflow/nextflow.config) is:

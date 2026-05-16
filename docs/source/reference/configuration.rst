@@ -151,11 +151,18 @@ Global Paths and Execution Settings
      - integer
      - ``2025``
      - Random seed passed to MNE ICA.
+   * - ``ica_compute_explained_variance``
+     - boolean
+     - ``false``
+     - Computes per-component ICA explained variance and writes
+       ``ica_explained_var.jl``. Disabled by default because this calculation
+       is slow and not always useful; when disabled, ICA review figures and
+       reports still work but EVAR labels are omitted.
    * - ``meg_visualize``
      - boolean
      - ``true``
      - Enables visualization outputs in coregistration and source
-       reconstruction.
+      reconstruction.
 
 Data Import
 -----------
@@ -360,6 +367,35 @@ interpolated immediately in the preprocessed raw file. If ``false``, bad
 channels are retained in ``raw.info['bads']`` for later exclusion or handling.
 ``artifact_images_enabled`` controls waveform and overview image generation for
 manual review, and ``meg_vendor`` selects vendor-specific plotting assumptions.
+
+For ICA rule-based labeling, ``ic_label_config.ICA_classify.meg_vendor`` can be
+set to ``auto``. This is the recommended cohort setting because each dataset may
+come from a different MEG system. When ``auto`` is used, MEGPrep infers the
+template family from the ICA channel names and applies bundled templates only
+when they are available. Current ECG/EOG template similarity bundles cover
+``elekta``/``neuromag``, ``ctf``, ``4d``/``bti``, and ``kit``. OPM datasets or
+unknown channel layouts skip template similarity gracefully and continue with
+the other ICA labeling methods.
+
+If the dataset vendor is known, ``meg_vendor_by_dataset`` can override ``auto``
+on a per-dataset basis. The key is matched against the ICA file path, so cohort
+dataset directory names are usually sufficient:
+
+.. code-block:: yaml
+
+   ICA_classify:
+     meg_vendor: auto
+     meg_vendor_by_dataset:
+       OPM-Artifacts: opm
+       Cam-CAN: neuromag
+       My-CTF-Dataset: ctf
+       default: auto
+
+Dataset-specific mappings take precedence over ``meg_vendor``. If no mapping
+matches, MEGPrep falls back to ``meg_vendor``; if that is ``auto``, it uses
+channel-name inference. For backward-compatible compact configs,
+``ICA_classify.meg_vendor`` may also be a mapping with the same keys, although
+``meg_vendor_by_dataset`` is preferred for clarity.
 
 Bad Segment Marking and Exclusion
 ---------------------------------

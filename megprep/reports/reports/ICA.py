@@ -321,11 +321,15 @@ else:
     else:
         # Parse the topology diagram file
         def parse_filename(filename):
-            match = re.search(r"(\d+)_evar_(-?\d+\.?\d*)(?=\.png)", filename)
+            match = re.search(r"^(\d+)_evar_(-?\d+\.?\d*)\.png$", filename)
             if match:
                 component_number = int(match.group(1))
                 score = float(match.group(2))
                 return {"filename": filename, "component": component_number, "ExplainedVar": score}
+            match = re.search(r"^(\d+)\.png$", filename)
+            if match:
+                component_number = int(match.group(1))
+                return {"filename": filename, "component": component_number, "ExplainedVar": None}
             return None
 
 
@@ -402,13 +406,16 @@ else:
                 st.markdown(f"### 🔬 Component {current_topo['component']}/{total_components - 1} - Topography")
 
                 # Create score badges
-                score_html = f'<span class="score-badge">📊 ExplainVar: {current_topo_score:.3f}</span>'
+                score_html = ""
+                if current_topo_score is not None:
+                    score_html = f'<span class="score-badge">📊 ExplainVar: {current_topo_score:.3f}</span>'
                 if current_eog_score is not None:
                     score_html += f'<span class="score-badge">👁️ EOG: {current_eog_score:.2f}</span>'
                 if current_ecg_score is not None:
                     score_html += f'<span class="score-badge">❤️ ECG: {current_ecg_score:.2f}</span>'
 
-                st.markdown(f'<div style="margin-bottom: 15px;">{score_html}</div>', unsafe_allow_html=True)
+                if score_html:
+                    st.markdown(f'<div style="margin-bottom: 15px;">{score_html}</div>', unsafe_allow_html=True)
 
                 st.image(
                     os.path.join(image_dir, current_topo_filename),

@@ -20,10 +20,13 @@ mne.viz.set_browser_backend('matplotlib')
 mpl.rcParams['figure.max_open_warning'] = 100
 
 def add_text(fig_path,exp_var):
-    image1 = Image.open(fig_path)  
-    
+    image1 = Image.open(fig_path)
+
     # Define the text and its formatting
-    text = 'mag:{:.1f}'.format(exp_var['mag']*100)+'%'
+    mag_ratio = exp_var.get("mag")
+    if mag_ratio is None:
+        return
+    text = 'mag:{:.1f}'.format(mag_ratio * 100)+'%'
     # text += ' grad:{:.1f}'.format(exp_var['grad']*100)+'%'
     # font = ImageFont.load_default()  # You can specify a different font if needed    
     font_size = 24  # Set the desired font size
@@ -60,10 +63,69 @@ def add_text(fig_path,exp_var):
 
 
 
-def run_ica(subj_tag, subj_res_path, subj_res_path_ica, fn_data, fn_ica, n_IC, modality, fname_bad_channels, fname_bad_segments, random_seed):
+def str_to_bool(value):
+    if isinstance(value, bool):
+        return value
+    value = str(value).strip().lower()
+    if value in {"true", "t", "1", "yes", "y"}:
+        return True
+    if value in {"false", "f", "0", "no", "n"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected boolean value, got: {value}")
+
+
+def remove_stale_component_property_outputs(subj_res_path, subj_res_path_ica, compute_explained_variance):
+    explained_var_file = Path(subj_res_path) / "ica_explained_var.jl"
+    if not compute_explained_variance and explained_var_file.exists():
+        explained_var_file.unlink()
+    stale_pattern = "*.png" if compute_explained_variance else "*_evar_*.png"
+    for file_path in Path(subj_res_path_ica).glob(stale_pattern):
+        if compute_explained_variance and not file_path.stem.isdigit():
+            continue
+        file_path.unlink()
+
+
+def save_component_property_figures(fig_list, subj_res_path_ica, raw, ica, compute_explained_variance):
+    explained_var_list = []
+    for component_idx, fig in enumerate(fig_list):
+        if compute_explained_variance:
+            explained_var_ratio = ica.get_explained_variance_ratio(raw, components=[component_idx], ch_type=["mag"])
+            for channel_type, ratio in explained_var_ratio.items():
+                print(f"Fraction of {channel_type} variance explained by IC {component_idx}: {ratio}")
+            fig_path = Path(subj_res_path_ica) / f'{component_idx}_evar_{explained_var_ratio.get("mag", 0.0):.4f}.png'
+            explained_var_list.append(explained_var_ratio)
+        else:
+            fig_path = Path(subj_res_path_ica) / f"{component_idx}.png"
+
+        try:
+            fig.savefig(fig_path)
+            plt.close(fig)
+            if compute_explained_variance:
+                add_text(fig_path, explained_var_list[-1])
+        except Exception as e:
+            print(e)
+
+    return explained_var_list
+
+
+def run_ica(
+    subj_tag,
+    subj_res_path,
+    subj_res_path_ica,
+    fn_data,
+    fn_ica,
+    n_IC,
+    modality,
+    fname_bad_channels,
+    fname_bad_segments,
+    random_seed,
+    compute_explained_variance=False,
+):
     figs = []
-    subj_res_path_ica = Path(subj_res_path_ica)  
+    subj_res_path_ica = Path(subj_res_path_ica)
     subj_res_path_ica.mkdir(parents=True, exist_ok=True)
+    compute_explained_variance = bool(compute_explained_variance)
+    remove_stale_component_property_outputs(subj_res_path, subj_res_path_ica, compute_explained_variance)
 
     raw = mne.io.read_raw_fif(fn_data,preload=True,verbose=False)
     raw = load_bad_chn_seg(raw, fname_bad_channels, fname_bad_segments)
@@ -93,39 +155,20 @@ def run_ica(subj_tag, subj_res_path, subj_res_path_ica, fn_data, fn_ica, n_IC, m
     else:
         ica = read_ica(os.path.join(subj_res_path, fn_ica))
     
+    fig_list = []
     try:
         fig_list = ica.plot_properties(raw_, picks=list(range(ica.n_components_)), reject_by_annotation=True, reject=None,
-                                        show=False, verbose=False)
+                                       show=False, verbose=False)
     except Exception as e:
         print(e)
 
-    # explain variance
-    explained_var_list = []
-    # picks = mne.pick_types(raw_.info, meg=True, ref_meg=False, eeg=False, eog=False, stim=False, exclude='bads')
-    for t in range(ica.n_components_):
-        # explained_var_ratio = ica.get_explained_variance_ratio(raw,components=[t],ch_type=['mag','grad'])
-        explained_var_ratio = ica.get_explained_variance_ratio(raw,components=[t],ch_type=['mag'])
-        for channel_type, ratio in explained_var_ratio.items():
-            print(f"Fraction of {channel_type} variance explained by all components: {ratio}")
-
-        try:
-            # tmpPics = subj_res_path_ica / f'_{t}.png'
-            tmpPics = subj_res_path_ica / f'{t}_evar_{explained_var_ratio["mag"]:.4f}.png'
-            fig_list[t].savefig(tmpPics)
-            plt.close(fig_list[t])
-
-            # add explain variance
-            add_text(tmpPics, explained_var_ratio)
-        except Exception as e:
-            print(e)
-
-        explained_var_list.append(explained_var_ratio)
-
-        # add overlay for before and after ICs removal.
-        # tmpOverPics = subj_res_path_ica / f"_{t}_overlay.png"
-        # fig = ica.plot_overlay(raw, exclude=[t], picks=picks,start=None,stop=20.,title=f"ICA{t:03d}-Signals before (red) and after (black) cleaning") # 20 seconds
-        # fig.savefig(tmpOverPics)
-        # plt.close(fig)
+    explained_var_list = save_component_property_figures(
+        fig_list=fig_list,
+        subj_res_path_ica=subj_res_path_ica,
+        raw=raw,
+        ica=ica,
+        compute_explained_variance=compute_explained_variance,
+    )
 
     # combine png
     # for t in range(ica.n_components_):
@@ -147,9 +190,10 @@ def run_ica(subj_tag, subj_res_path, subj_res_path_ica, fn_data, fn_ica, n_IC, m
     #     os.remove(f'{subj_res_path_ica}/_{t}.png')
     #     os.remove(f'{subj_res_path_ica}/_{t}_overlay.png')
     
-    #save explained var list
-    fname_ica_explained_var = os.path.join(subj_res_path, 'ica_explained_var.jl')
-    jl.dump(explained_var_list, fname_ica_explained_var)
+    if compute_explained_variance:
+        # save explained var list
+        fname_ica_explained_var = os.path.join(subj_res_path, 'ica_explained_var.jl')
+        jl.dump(explained_var_list, fname_ica_explained_var)
 
     #save sources 
     fname_ica_sources = os.path.join(subj_res_path, "ica_sources.fif")
@@ -212,6 +256,12 @@ def parse_arguments():
     parser.add_argument('--fname_bad_channels', required=True, help='Path to the bad channels file')
     parser.add_argument('--fname_bad_segments', required=True, help='Path to the bad segments file')
     parser.add_argument('--seed', required=False, default=2025, help='Random seed for ICA')
+    parser.add_argument(
+        '--compute_explained_variance',
+        type=str_to_bool,
+        default=False,
+        help='Whether to compute per-component explained variance. Disabled by default because it is slow for many datasets.',
+    )
 
     return parser.parse_args()
 
@@ -248,6 +298,7 @@ def main():
         fname_bad_channels=args.fname_bad_channels,
         fname_bad_segments=args.fname_bad_segments,
         random_seed=random_seed,
+        compute_explained_variance=args.compute_explained_variance,
     )
 
 
