@@ -2,12 +2,14 @@
 set -euo pipefail
 
 # Cohort runner: each immediate child directory under DATASET_ROOT is treated as
-# one MEGPrep dataset (Nextflow run + per-dataset reports), then a cohort-level
-# static HTML report is built from those outputs.
+# one MEGPrep dataset. Nextflow expands those datasets into a cohort channel,
+# runs dataset-level child pipelines concurrently, and then builds a cohort-level
+# static HTML report from the isolated dataset outputs.
 #
 # Paths below are placeholders. Override before running, for example:
 #   DATASET_ROOT=/path/to/megqc_cohort INPUT \
 #   OUTPUT_ROOT=/path/to/megqc_cohort_OUTPUT \
+#   COHORT_MAX_PARALLEL=4 \
 #   bash run_MultiDatasets.sh
 
 PIPELINE="${PIPELINE:-nextflow/meg_anat_pipeline_for_docker.nf}"
@@ -18,29 +20,23 @@ FS_SUBJECTS_ROOT="${FS_SUBJECTS_ROOT:-${OUTPUT_ROOT}/smri}"
 T1_ROOT="${T1_ROOT:-}"
 STEPS="${STEPS:-meg_ica}"
 RESUME="${RESUME:--resume}"
+STATIC_TASK_LOG_MODE="${STATIC_TASK_LOG_MODE:-}"
+COHORT_MAX_PARALLEL="${COHORT_MAX_PARALLEL:-2}"
 
-sanitize_dataset_name() {
-    local raw_name="$1"
-    raw_name="${raw_name// /_}"
-    printf "%s" "$raw_name" | tr -c "A-Za-z0-9_.-" "_"
+read_static_task_log_mode() {
+    [ -f "$CONFIG" ] || return 0
+    sed -n 's/^[[:space:]]*static_task_log_mode[[:space:]]*=[[:space:]]*["'\'']\([^"'\'']*\)["'\''].*/\1/p' "$CONFIG" | head -n 1
 }
 
-resolve_t1_dir() {
-    local dataset_dir="$1"
-    local original_dataset_name="$2"
-
-    if [ -z "$T1_ROOT" ]; then
-        printf "%s" "$dataset_dir"
-        return
-    fi
-
-    if [ -d "${T1_ROOT}/${original_dataset_name}" ]; then
-        printf "%s" "${T1_ROOT}/${original_dataset_name}"
-        return
-    fi
-
-    printf "%s" "$T1_ROOT"
-}
+STATIC_TASK_LOG_MODE="${STATIC_TASK_LOG_MODE:-$(read_static_task_log_mode)}"
+STATIC_TASK_LOG_MODE="${STATIC_TASK_LOG_MODE:-failed}"
+case "$STATIC_TASK_LOG_MODE" in
+    failed|all-command-log|none) ;;
+    *)
+        echo "Invalid STATIC_TASK_LOG_MODE: $STATIC_TASK_LOG_MODE (expected failed, all-command-log, or none)" >&2
+        exit 1
+        ;;
+esac
 
 if [ ! -d "$DATASET_ROOT" ]; then
     echo "DATASET_ROOT does not exist: $DATASET_ROOT" >&2
@@ -49,55 +45,47 @@ fi
 
 mkdir -p "$OUTPUT_ROOT/datasets" "$OUTPUT_ROOT/work" "$FS_SUBJECTS_ROOT"
 
-found_dataset=0
-for dataset_dir in "$DATASET_ROOT"/*; do
-    if [ ! -d "$dataset_dir" ]; then
-        continue
-    fi
-
-    original_dataset_name="$(basename "$dataset_dir")"
-    dataset_name="$(sanitize_dataset_name "$original_dataset_name")"
-    dataset_output_dir="${OUTPUT_ROOT}/datasets/${dataset_name}"
-    dataset_preproc_dir="${dataset_output_dir}/preprocessed"
-    dataset_work_dir="${OUTPUT_ROOT}/work/${dataset_name}"
-    dataset_fs_subjects_dir="${FS_SUBJECTS_ROOT}/${dataset_name}"
-    dataset_t1_dir="$(resolve_t1_dir "$dataset_dir" "$original_dataset_name")"
-
-    mkdir -p "$dataset_output_dir" "$dataset_work_dir" "$dataset_fs_subjects_dir"
-
-    echo "============================================================"
-    echo "Dataset: $original_dataset_name"
-    echo "Input:   $dataset_dir"
-    echo "Output:  $dataset_output_dir"
-    echo "MRI:     $dataset_fs_subjects_dir"
-    echo "T1:      $dataset_t1_dir"
-    echo "============================================================"
-
-    nextflow run "$PIPELINE" \
-        -c "$CONFIG" \
-        -w "$dataset_work_dir" \
-        --steps "$STEPS" \
-        --dataset_dir "$dataset_dir" \
-        --output_dir "$dataset_output_dir" \
-        --preproc_dir "$dataset_preproc_dir" \
-        --fs_subjects_dir "$dataset_fs_subjects_dir" \
-        --t1_dir "$dataset_t1_dir" \
-        --t1_bids_dir "$dataset_t1_dir" \
-        -with-report "${dataset_output_dir}/report.html" \
-        -with-timeline "${dataset_output_dir}/timeline.html" \
-        -with-trace \
-        $RESUME
-
-    found_dataset=1
-done
-
-if [ "$found_dataset" -eq 0 ]; then
+if ! find "$DATASET_ROOT" -mindepth 1 -maxdepth 1 -type d -print -quit | grep -q .; then
     echo "No dataset subdirectories were found under: $DATASET_ROOT" >&2
     exit 1
 fi
 
-python megprep/reports/cohort_static_html_report.py \
-    --cohort_root "${OUTPUT_ROOT}/datasets" \
-    --output_dir "${OUTPUT_ROOT}/cohort_static_html_report"
+PIPELINE_ABS="$(cd "$(dirname "$PIPELINE")" && pwd)/$(basename "$PIPELINE")"
+CONFIG_ABS="$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG")"
+
+echo "============================================================"
+echo "Cohort root:          $DATASET_ROOT"
+echo "Output root:          $OUTPUT_ROOT"
+echo "MRI root:             $FS_SUBJECTS_ROOT"
+echo "Pipeline:             $PIPELINE_ABS"
+echo "Config:               $CONFIG_ABS"
+echo "Steps:                $STEPS"
+echo "Parallel datasets:    $COHORT_MAX_PARALLEL"
+echo "Task log mode:        $STATIC_TASK_LOG_MODE"
+if [ -n "$T1_ROOT" ]; then
+    echo "T1 root:              $T1_ROOT"
+else
+    echo "T1 root:              <per dataset input>"
+fi
+echo "============================================================"
+
+nextflow run "$PIPELINE_ABS" \
+    -c "$CONFIG_ABS" \
+    -w "${OUTPUT_ROOT}/work/cohort_driver" \
+    --cohort true \
+    --cohort_max_parallel "$COHORT_MAX_PARALLEL" \
+    --cohort_child_pipeline_file "$PIPELINE_ABS" \
+    --cohort_child_config "$CONFIG_ABS" \
+    --cohort_t1_root "$T1_ROOT" \
+    --steps "$STEPS" \
+    --dataset_dir "$DATASET_ROOT" \
+    --output_dir "$OUTPUT_ROOT" \
+    --preproc_dir "${OUTPUT_ROOT}/preprocessed" \
+    --fs_subjects_dir "$FS_SUBJECTS_ROOT" \
+    --static_task_log_mode "$STATIC_TASK_LOG_MODE" \
+    -with-report "${OUTPUT_ROOT}/cohort_report.html" \
+    -with-timeline "${OUTPUT_ROOT}/cohort_timeline.html" \
+    -with-trace "${OUTPUT_ROOT}/cohort_trace.txt" \
+    $RESUME
 
 echo "Cohort report: ${OUTPUT_ROOT}/cohort_static_html_report/index.html"

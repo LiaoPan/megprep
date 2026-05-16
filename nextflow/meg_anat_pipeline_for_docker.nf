@@ -661,6 +661,165 @@ process generate_static_html_report {
     """
 }
 
+process run_cohort_dataset {
+    tag "${dataset_name}"
+    maxForks params.cohort_max_parallel
+    debug true
+
+    input:
+    tuple val(original_dataset_name), val(dataset_name), val(dataset_dir), val(child_pipeline_file), val(child_config_file)
+
+    output:
+    path "cohort_dataset_${dataset_name}.done", emit: completion_marker
+
+    script:
+    dataset_output_dir = "${params.output_dir}/datasets/${dataset_name}"
+    dataset_preproc_dir = "${dataset_output_dir}/preprocessed"
+    dataset_work_dir = "${params.output_dir}/work/${dataset_name}"
+    dataset_fs_subjects_dir = "${params.fs_subjects_dir}/${dataset_name}"
+    dataset_child_log = "${dataset_output_dir}/cohort_child_nextflow.log"
+    report_script = "${params.code_dir}/reports/static_html_report.py"
+    error_mode = params.error_mode ?: 'lenient'
+    """
+    set -euo pipefail
+
+    sanitize_dataset_name() {
+        local raw_name="\$1"
+        raw_name="\${raw_name// /_}"
+        printf "%s" "\$raw_name" | tr -c "A-Za-z0-9_.-" "_"
+    }
+
+    steps_need_t1() {
+        local steps_value="\$1"
+        local primary="\${steps_value%%,*}"
+        case "\$primary" in
+            all|anatomy)
+                return 0
+                ;;
+        esac
+        case ",\${steps_value}," in
+            *,with_anatomy,*)
+                return 0
+                ;;
+        esac
+        return 1
+    }
+
+    resolve_t1_dir() {
+        local dataset_dir="\$1"
+        local original_dataset_name="\$2"
+        local t1_root="${params.cohort_t1_root ?: ''}"
+
+        if [ -z "\$t1_root" ]; then
+            printf "%s" "\$dataset_dir"
+            return
+        fi
+
+        if [ -d "\${t1_root}/\${original_dataset_name}" ]; then
+            printf "%s" "\${t1_root}/\${original_dataset_name}"
+            return
+        fi
+
+        printf "%s" "\$t1_root"
+    }
+
+    mkdir -p "${dataset_output_dir}" "${dataset_preproc_dir}" "${dataset_work_dir}" "${dataset_fs_subjects_dir}"
+
+    steps_value="${params.steps ?: 'meg_all'}"
+    dataset_t1_dir=""
+    if steps_need_t1 "\$steps_value"; then
+        dataset_t1_dir="\$(resolve_t1_dir "${dataset_dir}" "${original_dataset_name}")"
+    fi
+
+    echo "============================================================"
+    echo "Cohort dataset: ${original_dataset_name}"
+    echo "Sanitized name: ${dataset_name}"
+    echo "Input:          ${dataset_dir}"
+    echo "Output:         ${dataset_output_dir}"
+    echo "MRI:            ${dataset_fs_subjects_dir}"
+    if [ -n "\$dataset_t1_dir" ]; then
+        echo "T1:             \$dataset_t1_dir"
+    else
+        echo "T1:             <not used for steps=\$steps_value>"
+    fi
+    echo "============================================================"
+
+    nextflow_cmd=(
+        nextflow run "${child_pipeline_file}"
+        -c "${child_config_file}"
+        -w "${dataset_work_dir}"
+        --cohort false
+        --steps "\$steps_value"
+        --dataset_dir "${dataset_dir}"
+        --output_dir "${dataset_output_dir}"
+        --preproc_dir "${dataset_preproc_dir}"
+        --fs_subjects_dir "${dataset_fs_subjects_dir}"
+        --static_task_log_mode "${params.static_task_log_mode}"
+        --error_mode "${error_mode}"
+        -with-report "${dataset_output_dir}/report.html"
+        -with-timeline "${dataset_output_dir}/timeline.html"
+        -with-trace "${dataset_output_dir}/trace.txt"
+    )
+
+    if [ -n "\$dataset_t1_dir" ]; then
+        nextflow_cmd+=(--t1_dir "\$dataset_t1_dir" --t1_bids_dir "\$dataset_t1_dir")
+    fi
+
+    echo "Child Nextflow log: ${dataset_child_log}"
+    set +e
+    NXF_ANSI_LOG=false "\${nextflow_cmd[@]}" 2>&1 | sed -u 's/^/[${dataset_name}] /' | tee "${dataset_child_log}"
+    child_status=\${PIPESTATUS[0]}
+    set -e
+
+    cp "${child_config_file}" "${dataset_output_dir}/nextflow.config" || true
+
+    if [ -d "${dataset_preproc_dir}" ]; then
+        python "${report_script}" \\
+            --report_root "${dataset_output_dir}" \\
+            --output_dir "${dataset_output_dir}/static_html_report" \\
+            --bad_channel_threshold ${params.bad_channel_threshold} \\
+            --bad_segment_threshold ${params.bad_segment_threshold} \\
+            --coreg_mean_threshold ${params.coreg_mean_threshold} \\
+            --coreg_max_threshold ${params.coreg_max_threshold} \\
+            --epoch_reject_rate_threshold ${params.epoch_reject_rate_threshold} \\
+            --task_log_mode "${params.static_task_log_mode}" \\
+            --zip_output false || true
+    else
+        echo "Skipping static report regeneration; no preprocessed directory found at ${dataset_preproc_dir}"
+    fi
+
+    echo "dataset=${dataset_name}" > "cohort_dataset_${dataset_name}.done"
+    echo "status=\${child_status}" >> "cohort_dataset_${dataset_name}.done"
+
+    if [ "\${child_status}" -ne 0 ] && [ "${error_mode}" = "strict" ]; then
+        exit "\${child_status}"
+    fi
+    """
+}
+
+process generate_cohort_static_html_report {
+    tag "cohort-static-html-report"
+
+    input:
+    path dataset_markers
+
+    output:
+    path "cohort_static_html_report_done.txt", emit: completion_marker
+
+    script:
+    report_script = "${params.code_dir}/reports/cohort_static_html_report.py"
+    cohort_root = "${params.output_dir}/datasets"
+    report_output_dir = "${params.output_dir}/cohort_static_html_report"
+    """
+    set -euo pipefail
+    python "${report_script}" \\
+        --cohort_root "${cohort_root}" \\
+        --output_dir "${report_output_dir}"
+
+    echo "Cohort static HTML report generated at ${report_output_dir}" > cohort_static_html_report_done.txt
+    """
+}
+
 import java.nio.file.Path
 class AnatOutput {
     String mri_subject_id
@@ -752,6 +911,54 @@ workflow {
     def cfg = parseMegPipelineSteps(params.steps ?: 'meg_all')
 
     log.info "Pipeline steps: primary=${cfg.primary}, megStage=${cfg.megStage}, runAnatomy=${cfg.runAnatomy}, runMeg=${cfg.runMeg}, skipIca=${cfg.skipIca}"
+
+    if ((params.cohort ?: false).toString().toBoolean()) {
+        def sanitizeDatasetName = { String rawName ->
+            rawName.replace(' ', '_').replaceAll(/[^A-Za-z0-9_.-]/, '_')
+        }
+        def childPipelineFile = params.cohort_child_pipeline_file?.toString()
+        if (!childPipelineFile) {
+            try {
+                childPipelineFile = workflow.scriptFile?.toString()
+            } catch (Exception ignored) {
+                childPipelineFile = ''
+            }
+        }
+        if (!childPipelineFile) {
+            childPipelineFile = new File(workflow.projectDir.toString(), 'nextflow/meg_anat_pipeline_for_docker.nf').absolutePath
+        }
+
+        def childConfigFile = params.cohort_child_config?.toString()
+        if (!childConfigFile) {
+            try {
+                def configFiles = workflow.configFiles
+                if (configFiles) {
+                    def items = (configFiles instanceof Collection) ? configFiles : (configFiles.getClass().isArray() ? configFiles.toList() : [configFiles])
+                    childConfigFile = items[-1].toString()
+                }
+            } catch (Exception ignored) {
+                childConfigFile = ''
+            }
+        }
+        if (!childConfigFile) {
+            childConfigFile = new File(workflow.projectDir.toString(), 'nextflow.config').absolutePath
+        }
+
+        log.info "Cohort mode enabled: dataset root=${params.dataset_dir}, max parallel datasets=${params.cohort_max_parallel ?: 2}"
+        log.info "Cohort child pipeline: ${childPipelineFile}"
+        log.info "Cohort child config: ${childConfigFile}"
+
+        Channel
+            .fromPath("${params.dataset_dir}/*", type: 'dir', checkIfExists: true)
+            .map { datasetPath ->
+                def originalName = datasetPath.getName()
+                tuple(originalName, sanitizeDatasetName(originalName), datasetPath.toString(), childPipelineFile, childConfigFile)
+            }
+            .set { cohort_dataset_ch }
+
+        cohort_dataset_results = run_cohort_dataset(cohort_dataset_ch)
+        generate_cohort_static_html_report(cohort_dataset_results.completion_marker.collect())
+    } else {
 
     def snapshot = [
             dataset_dir: params.dataset_dir?.toString(),
@@ -1135,6 +1342,7 @@ workflow {
         } else if (cfg.megStage == 0) {
             generate_static_html_report(preproc_subject_paths_dta.bad_channels.collect(), run_manifest_ch, false)
         }
+    }
     }
     }
 }

@@ -19,6 +19,7 @@ ANAT_ONLY=false
 MEG_ONLY=false
 VIEW_REPORT=false
 COHORT_MODE=false
+COHORT_MAX_PARALLEL="${COHORT_MAX_PARALLEL:-2}"
 NEXTFLOW_FILE="/program/nextflow/meg_pipeline.nf"
 STREAMLIT_APP_PATH="/program/megprep/reports/reports.py"
 COHORT_REPORT_PATH="/program/megprep/reports/cohort_static_html_report.py"
@@ -51,6 +52,7 @@ while [[ "$#" -gt 0 ]]; do
 
         # cohort mode
         --cohort) COHORT_MODE=true ;;
+        --cohort_max_parallel|--cohort-max-parallel) COHORT_MAX_PARALLEL="$2"; shift ;;
 
         # static report options
         --static_task_log_mode|--task-log-mode) STATIC_TASK_LOG_MODE="$2"; shift ;;
@@ -67,6 +69,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  -s, --steps           Same as Nextflow --steps / params.steps (e.g. all, meg_all, anatomy, report, meg_epochs,skip_ica)"
             echo "  -r, --view-report     Run Streamlit to view the report (does not run Nextflow)"
             echo "  --cohort              Treat --input as a directory of datasets; isolate each child's output and FreeSurfer SUBJECTS_DIR"
+            echo "  --cohort_max_parallel Number of datasets to run concurrently in cohort mode (default: 2)"
             echo "  --static_task_log_mode failed|all-command-log|none"
             echo "  --fs_license_file     Specify the FreeSurfer license file"
             echo "  --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory containing processed T1 results"
@@ -306,48 +309,38 @@ if [ "$COHORT_MODE" = true ]; then
     fi
 
     echo "Running cohort mode. Dataset collection root: $INPUT_DIR"
-    datasets_output_dir="${OUTPUT_DIR}/datasets"
     cohort_work_dir="${OUTPUT_DIR}/work"
     cohort_fs_subjects_base="${FS_SUBJECTS_DIR:-/smri}"
-    mkdir -p "$datasets_output_dir" "$cohort_work_dir"
-    found_dataset=0
-    effective_steps="$(effective_steps_value)"
+    mkdir -p "${OUTPUT_DIR}/datasets" "$cohort_work_dir" "$cohort_fs_subjects_base"
 
-    for dataset_dir in "$INPUT_DIR"/*; do
-        if [ ! -d "$dataset_dir" ]; then
-            continue
-        fi
+    write_run_config "$INPUT_DIR" "$OUTPUT_DIR" "$RUN_CONFIG_FILE" "$cohort_fs_subjects_base" ""
 
-        original_dataset_name="$(basename "$dataset_dir")"
-        dataset_name="$(sanitize_dataset_name "$original_dataset_name")"
-        dataset_output_dir="${datasets_output_dir}/${dataset_name}"
-        dataset_run_config="${OUTPUT_DIR}/run_nextflow_${dataset_name}.config"
-        dataset_fs_subjects_dir="${cohort_fs_subjects_base}/${dataset_name}"
-        dataset_t1_dir=""
-        if steps_need_t1 "$effective_steps"; then
-            dataset_t1_dir="$(resolve_cohort_t1_dir "$dataset_dir" "$original_dataset_name")"
-        fi
+    cohort_args=(
+        --cohort true
+        --cohort_max_parallel "$COHORT_MAX_PARALLEL"
+        --cohort_child_pipeline_file "$NEXTFLOW_FILE"
+        --cohort_child_config "$RUN_CONFIG_FILE"
+        --cohort_t1_root "$T1_DIR"
+        --dataset_dir "$INPUT_DIR"
+        --output_dir "$OUTPUT_DIR"
+        --preproc_dir "${OUTPUT_DIR}/preprocessed"
+        --fs_subjects_dir "$cohort_fs_subjects_base"
+    )
 
-        echo "Cohort dataset: $dataset_name"
-        if [ -n "$dataset_t1_dir" ]; then
-            echo "T1: $dataset_t1_dir"
-        else
-            echo "T1: <not used for steps=${effective_steps:-config default}>"
-        fi
-        write_run_config "$dataset_dir" "$dataset_output_dir" "$dataset_run_config" "$dataset_fs_subjects_dir" "$dataset_t1_dir"
-        run_nextflow_pipeline "$dataset_run_config" "$dataset_output_dir" "${cohort_work_dir}/${dataset_name}"
-        regenerate_static_report "$dataset_output_dir"
-        found_dataset=1
-    done
-
-    if [ "$found_dataset" -eq 0 ]; then
-        echo "Error: no dataset subdirectories were found under $INPUT_DIR."
-        exit 1
+    if [ -n "$STEPS" ]; then
+        cohort_args+=(--steps "$STEPS")
     fi
 
-    python "$COHORT_REPORT_PATH" \
-        --cohort_root "$datasets_output_dir" \
-        --output_dir "${OUTPUT_DIR}/cohort_static_html_report"
+    echo "Cohort parallel datasets: $COHORT_MAX_PARALLEL"
+    nextflow run "${NEXTFLOW_FILE}" \
+        -c "${RUN_CONFIG_FILE}" \
+        "${cohort_args[@]}" \
+        --static_task_log_mode "$STATIC_TASK_LOG_MODE" \
+        -w "${cohort_work_dir}/cohort_driver" \
+        -with-report "${OUTPUT_DIR}/cohort_report.html" \
+        -with-timeline "${OUTPUT_DIR}/cohort_timeline.html" \
+        -with-trace "${OUTPUT_DIR}/cohort_trace.txt" \
+        "${nextflow_args[@]}"
 
     chmod -R 777 "$OUTPUT_DIR"
     exit 0

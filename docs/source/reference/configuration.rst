@@ -139,6 +139,23 @@ Global Paths and Execution Settings
      - path
      - Container path ``/program/megprep``
      - Directory containing MEGPrep Python scripts.
+   * - ``cohort``
+     - boolean
+     - ``false``
+     - Treat ``dataset_dir`` as a collection root and let Nextflow expand each
+       immediate child directory into an independent dataset run.
+   * - ``cohort_max_parallel``
+     - integer
+     - ``2``
+     - Maximum number of dataset-level child runs to execute concurrently in
+       cohort mode.
+   * - ``cohort_t1_root``
+     - path
+     - unset
+     - Optional structural MRI collection root for cohort mode. If it contains
+       a child directory matching a dataset name, that directory is used as the
+       dataset T1 input; otherwise the value is reused for all datasets. When
+       unset, each MEG dataset directory is used as its own T1 root.
    * - ``workDir``
      - path
      - ``${params.output_dir}/work``

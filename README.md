@@ -220,7 +220,9 @@ docker run ... cmrlab/megprep:<tag> ... --static_task_log_mode all-command-log
 For a directory that contains many independent MEG datasets, use **`--cohort`**.
 MEGPrep treats each immediate child directory as one dataset, runs the existing
 single-dataset pipeline into an isolated output folder, and then builds a
-cohort-level static report that links back to each dataset report.
+cohort-level static report that links back to each dataset report. The cohort
+runner is managed by Nextflow: dataset directories are expanded into a channel
+and multiple datasets can run concurrently.
 In cohort mode, FreeSurfer/DeepPrep outputs are also isolated by dataset under
 `<fs_subjects_dir>/<dataset_name>` so repeated MRI subject IDs such as `sub-01`
 do not overwrite each other.
@@ -235,7 +237,8 @@ docker run -it --rm \
   -i /input -o /output \
   --fs_license_file /fs_license.txt --fs_subjects_dir /smri \
   --steps meg_artifacts \
-  --cohort
+  --cohort \
+  --cohort_max_parallel 4
 ```
 
 Outputs are organized as:
@@ -252,6 +255,10 @@ each run; otherwise it uses the provided `--t1_dir` for all datasets.
 Use a milestone such as `--steps meg_artifacts` or `--steps meg_ica` for a quick
 first pass across many public datasets, then resume selected datasets with a
 deeper step when needed.
+
+Use `--cohort_max_parallel N` to control dataset-level concurrency. This is in
+addition to Nextflow's normal process-level parallelism inside each dataset, so
+set it according to available CPU, memory, and I/O capacity.
 
 ### Using pipeline steps with Docker
 
@@ -302,7 +309,8 @@ docker run -it --rm \
 | `-o`, `--output` | Specify the output directory (including report results) |
 | `-s`, `--steps` | **Nextflow (`meg_anat_pipeline_for_docker.nf`):** sets `params.steps` (e.g. `all`, `meg_all`, `anatomy`, `report`). With **Docker**, pass this **after the image name**; see [Using pipeline steps with Docker](#using-pipeline-steps-with-docker). Same semantics as [Pipeline steps](#pipeline-steps). |
 | `-r`, `--view-report` | Run Streamlit to view the report (does not run Nextflow) |
-| `--cohort` | Treat the input directory as a collection of datasets, run each child dataset separately, and generate a cohort-level static report |
+| `--cohort` | Treat the input directory as a collection of datasets, run each child dataset separately through a Nextflow dataset channel, and generate a cohort-level static report |
+| `--cohort_max_parallel` | Maximum number of datasets to run concurrently in cohort mode |
 | `--static_task_log_mode` | Static report task log bundling mode: `all-command-log` (default), `failed`, or `none` |
 | `--fs_license_file` | Specify the FreeSurfer license file path |
 | `--fs_subjects_dir` | Specify the FreeSurfer `SUBJECTS_DIR` containing processed T1 results |
