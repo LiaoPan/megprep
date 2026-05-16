@@ -187,6 +187,42 @@ def plot_artifact_mask_heatmap(raw, bad_channels, output_path, max_time_bins=240
     plt.close(fig)
     logger.info(f"Artifact mask heatmap saved to {output_path}")
 
+
+def read_bad_channels_file(bad_channels_file):
+    bad_channels_file = Path(bad_channels_file)
+    if not bad_channels_file.is_file():
+        return []
+    with open(bad_channels_file, "r", encoding="utf-8", errors="replace") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def generate_artifact_mask_heatmap_from_saved_outputs(input_file, bad_channels_file, bad_segments_file, heatmap_output):
+    """Generate the artifact mask heatmap from saved bad-channel and bad-segment outputs."""
+    bad_channels = read_bad_channels_file(bad_channels_file)
+    raw = mne.io.read_raw(input_file, preload=False)
+    if Path(bad_segments_file).is_file():
+        raw.set_annotations(mne.read_annotations(str(bad_segments_file)))
+    raw.info["bads"] = list(dict.fromkeys(list(raw.info.get("bads", [])) + bad_channels))
+    plot_artifact_mask_heatmap(raw=raw, bad_channels=bad_channels, output_path=heatmap_output)
+
+
+def ensure_artifact_mask_heatmap(input_file, bad_channels_file, bad_segments_file, heatmap_output, force=False):
+    heatmap_output = Path(heatmap_output)
+    if heatmap_output.is_file() and not force:
+        logger.info(f"Artifact mask heatmap already exists: {heatmap_output}")
+        return
+    try:
+        logger.info("Generating artifact mask heatmap...")
+        generate_artifact_mask_heatmap_from_saved_outputs(
+            input_file=input_file,
+            bad_channels_file=bad_channels_file,
+            bad_segments_file=bad_segments_file,
+            heatmap_output=heatmap_output,
+        )
+    except Exception as e:
+        logger.error(f"Error generating artifact mask heatmap: {e}")
+
+
 def find_bad_channels(raw,config):
     """Detect bad channels using multiple methods."""
     bad_channels = []
@@ -307,9 +343,17 @@ def main(args):
     base_name = os.path.basename(args.input).split('.')[0]
     output_bad_segments_file = f"{args.output}/{base_name}_bad_segments.txt"
     output_bad_channels_file = f"{args.output}/{base_name}_bad_channels.txt"
+    check_imgs_output_dir = Path(output_bad_channels_file).parent / "check_imgs"
+    heatmap_img_out = check_imgs_output_dir / "artifact_mask_heatmap.png"
 
     if os.path.exists(output_bad_segments_file) and os.path.exists(output_bad_channels_file):
         logger.info(f"The file {output_bad_segments_file}/{output_bad_channels_file} already exists, and the data will not be overwritten.")
+        ensure_artifact_mask_heatmap(
+            input_file=args.input,
+            bad_channels_file=output_bad_channels_file,
+            bad_segments_file=output_bad_segments_file,
+            heatmap_output=heatmap_img_out,
+        )
     else:
         # raw = mne.io.read_raw_fif(args.input, preload=True)
         raw = mne.io.read_raw(args.input, preload=True)
@@ -350,17 +394,13 @@ def main(args):
         except Exception as e:
             logger.error(f"Error overwriting:{args.input}...,\n {e}")
 
-        check_imgs_output_dir = Path(output_bad_channels_file).parent / "check_imgs"
-        heatmap_img_out = Path(f"{check_imgs_output_dir}/artifact_mask_heatmap.png")
-        try:
-            logger.info("Generating artifact mask heatmap...")
-            plot_artifact_mask_heatmap(
-                raw=raw,
-                bad_channels=bad_channels,
-                output_path=heatmap_img_out,
-            )
-        except Exception as e:
-            logger.error(f"Error generating artifact mask heatmap: {e}")
+        ensure_artifact_mask_heatmap(
+            input_file=args.input,
+            bad_channels_file=output_bad_channels_file,
+            bad_segments_file=output_bad_segments_file,
+            heatmap_output=heatmap_img_out,
+            force=True,
+        )
 
         # Generate detailed artifacts check images.
         if config.get('artifact_images_enabled',True):
