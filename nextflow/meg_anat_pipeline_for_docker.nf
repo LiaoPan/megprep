@@ -510,7 +510,7 @@ ${manifest_json}
 EOF_MANIFEST
 
     python "${report_script}" \\
-        --report_root "${output_dir}" \\
+        --report_root "${preproc_dir}" \\
         --output_dir "${output_dir}/static_html_report" \\
         --bad_channel_threshold ${params.bad_channel_threshold} \\
         --bad_segment_threshold ${params.bad_segment_threshold} \\
