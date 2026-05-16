@@ -21,7 +21,6 @@ import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
-from matplotlib.patches import Patch
 from pathlib import Path
 from osl_ephys.preprocessing.osl_wrappers import detect_badchannels, detect_badsegments
 # from tools.osl.osl_wrappers import detect_badchannels, detect_badsegments
@@ -60,7 +59,7 @@ def _annotation_to_sample_bounds(raw, onset, duration):
 
 
 def plot_artifact_mask_heatmap(raw, bad_channels, output_path, max_time_bins=2400):
-    """Plot a compact mask of bad channels and bad time spans."""
+    """Plot a report-friendly mask of bad channels and bad time spans."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -112,78 +111,69 @@ def plot_artifact_mask_heatmap(raw, bad_channels, output_path, max_time_bins=240
     time_scale = 60.0 if duration_sec >= 120 else 1.0
     time_label = "Time (min)" if time_scale == 60.0 else "Time (s)"
     extent = [0, duration_sec / time_scale, -0.5, n_channels - 0.5]
-    x_values = np.linspace(0, duration_sec / time_scale, n_bins)
 
-    cmap = ListedColormap(["#f8fafc", "#ef4444", "#2563eb", "#7e22ce"])
+    cmap = ListedColormap(["#f8fafc", "#e11d48", "#2563eb", "#7c3aed"])
     norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap.N)
-    figure_height = max(5.0, min(10.5, 3.2 + n_channels * 0.035))
-    fig = plt.figure(figsize=(13.5, figure_height), dpi=180)
-    grid = fig.add_gridspec(
-        2,
-        2,
-        width_ratios=(24, 4),
-        height_ratios=(3, 16),
-        hspace=0.06,
-        wspace=0.04,
-    )
-    ax_top = fig.add_subplot(grid[0, 0])
-    ax_heatmap = fig.add_subplot(grid[1, 0], sharex=ax_top)
-    ax_side = fig.add_subplot(grid[1, 1], sharey=ax_heatmap)
+    figure_height = max(4.6, min(10.0, 2.3 + n_channels * 0.032))
+    fig, ax = plt.subplots(figsize=(12.5, figure_height), dpi=180)
 
-    segment_fraction = np.isin(mask, [1, 3]).mean(axis=0) * 100.0
-    ax_top.fill_between(x_values, segment_fraction, color="#ef4444", alpha=0.20, linewidth=0)
-    ax_top.plot(x_values, segment_fraction, color="#dc2626", linewidth=1.2)
-    ax_top.set_ylabel("Bad span\ncoverage (%)", fontsize=8, color="#475467")
-    ax_top.tick_params(axis="x", labelbottom=False)
-    ax_top.tick_params(axis="y", labelsize=8, colors="#667085")
-    ax_top.grid(axis="y", color="#e5e7eb", linewidth=0.8)
-    ax_top.spines[["top", "right"]].set_visible(False)
-
-    ax_heatmap.imshow(mask, aspect="auto", interpolation="nearest", origin="lower", cmap=cmap, norm=norm, extent=extent)
-    ax_heatmap.set_xlabel(time_label, fontsize=10)
-    ax_heatmap.set_ylabel("Channels", fontsize=10)
+    ax.imshow(mask, aspect="auto", interpolation="nearest", origin="lower", cmap=cmap, norm=norm, extent=extent)
+    ax.set_xlabel(time_label, fontsize=10, color="#334155")
+    ax.set_ylabel(f"Channels (n={n_channels})", fontsize=10, color="#334155")
     max_y_ticks = 18
     if n_channels <= max_y_ticks:
         tick_idx = np.arange(n_channels)
     else:
         tick_idx = np.unique(np.linspace(0, n_channels - 1, max_y_ticks).astype(int))
-    ax_heatmap.set_yticks(tick_idx)
-    ax_heatmap.set_yticklabels([channel_names[idx] for idx in tick_idx], fontsize=7)
-    ax_heatmap.tick_params(axis="x", labelsize=8)
-    ax_heatmap.spines[["top", "right"]].set_visible(False)
+    ax.set_yticks(tick_idx)
+    ax.set_yticklabels([channel_names[idx] for idx in tick_idx], fontsize=7, color="#475569")
+    ax.tick_params(axis="x", labelsize=8, colors="#475569")
+    ax.tick_params(axis="y", labelsize=7, colors="#475569")
+    ax.grid(False)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_color("#cbd5e1")
 
-    channel_segment_fraction = np.isin(mask, [1, 3]).mean(axis=1) * 100.0
-    side_colors = np.where(bad_channel_rows, "#2563eb", "#ef4444")
-    ax_side.barh(np.arange(n_channels), channel_segment_fraction, color=side_colors, alpha=0.78, height=0.82)
-    ax_side.set_xlabel("Bad\nspan (%)", fontsize=8, color="#475467")
-    ax_side.tick_params(axis="x", labelsize=8, colors="#667085")
-    ax_side.tick_params(axis="y", left=False, labelleft=False)
-    ax_side.grid(axis="x", color="#e5e7eb", linewidth=0.8)
-    ax_side.spines[["top", "right", "left"]].set_visible(False)
+    title = "Bad Channels and Bad Time Segments"
+    subtitle = f"{int(bad_channel_rows.sum())} bad channels | {bad_segment_count} bad segments | {bad_segment_duration:.1f}s marked bad"
+    ax.set_title(title, loc="left", fontsize=13, fontweight="bold", color="#111827", pad=22)
+    ax.text(
+        0,
+        1.015,
+        subtitle,
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=8.5,
+        color="#64748b",
+    )
 
-    legend_handles = [
-        Patch(facecolor="#f8fafc", edgecolor="#cbd5e1", label="Clean"),
-        Patch(facecolor="#ef4444", label="Bad segment"),
-        Patch(facecolor="#2563eb", label="Bad channel"),
-        Patch(facecolor="#7e22ce", label="Bad channel + segment"),
+    swatches = [
+        ("#e11d48", "bad segment"),
+        ("#2563eb", "bad channel"),
+        ("#7c3aed", "both"),
     ]
-    title = "Artifact mask heatmap"
-    subtitle = (
-        f"{n_channels} channels | {int(bad_channel_rows.sum())} bad channels | "
-        f"{bad_segment_count} bad segments | {bad_segment_duration:.1f}s marked bad"
-    )
-    fig.suptitle(title, x=0.08, y=0.995, ha="left", fontsize=14, fontweight="bold", color="#111827")
-    fig.text(0.08, 0.955, subtitle, ha="left", va="top", fontsize=9, color="#667085")
-    fig.legend(
-        handles=legend_handles,
-        loc="upper right",
-        bbox_to_anchor=(0.98, 0.995),
-        ncol=2,
-        frameon=False,
-        fontsize=8,
-    )
+    x0 = 0.995
+    y0 = 1.035
+    swatch_offsets = [0.16, 0.22, 0.0]
+    for idx, (color, label) in enumerate(reversed(swatches)):
+        ax.text(
+            x0,
+            y0,
+            f"■ {label}",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=9.5,
+            color=color,
+        )
+        x0 -= swatch_offsets[idx]
+
+    fig.subplots_adjust(left=0.085, right=0.985, top=0.88, bottom=0.16)
     fig.patch.set_facecolor("white")
-    fig.savefig(output_path, bbox_inches="tight", facecolor="white")
+    save_kwargs = {"bbox_inches": "tight", "facecolor": "white"}
+    if output_path.suffix.lower() in {".jpg", ".jpeg"}:
+        save_kwargs["pil_kwargs"] = {"quality": 92, "optimize": True}
+    fig.savefig(output_path, **save_kwargs)
     plt.close(fig)
     logger.info(f"Artifact mask heatmap saved to {output_path}")
 
@@ -344,7 +334,7 @@ def main(args):
     output_bad_segments_file = f"{args.output}/{base_name}_bad_segments.txt"
     output_bad_channels_file = f"{args.output}/{base_name}_bad_channels.txt"
     check_imgs_output_dir = Path(output_bad_channels_file).parent / "check_imgs"
-    heatmap_img_out = check_imgs_output_dir / "artifact_mask_heatmap.png"
+    heatmap_img_out = check_imgs_output_dir / "artifact_mask_heatmap.jpg"
 
     if os.path.exists(output_bad_segments_file) and os.path.exists(output_bad_channels_file):
         logger.info(f"The file {output_bad_segments_file}/{output_bad_channels_file} already exists, and the data will not be overwritten.")

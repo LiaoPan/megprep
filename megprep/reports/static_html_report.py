@@ -2750,8 +2750,19 @@ def collect_subject_data(
         except Exception as exc:
             artifact_data["error"] = str(exc)
 
-    heatmap_file = artifact_dir / "check_imgs" / "artifact_mask_heatmap.png"
-    if heatmap_file.is_file():
+    heatmap_file = next(
+        (
+            candidate
+            for candidate in [
+                artifact_dir / "check_imgs" / "artifact_mask_heatmap.jpg",
+                artifact_dir / "check_imgs" / "artifact_mask_heatmap.jpeg",
+                artifact_dir / "check_imgs" / "artifact_mask_heatmap.png",
+            ]
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if heatmap_file:
         rel = copy_asset(heatmap_file, output_root, subject_slug, "artifacts")
         artifact_data["assets"].append(
             {
@@ -2759,7 +2770,6 @@ def collect_subject_data(
                 "rel_path": rel,
                 "category": "Artifacts",
                 "figure_class": "wide",
-                "badge": {"text": "Bad channel / bad segment mask", "class": "warn"},
             }
         )
 
