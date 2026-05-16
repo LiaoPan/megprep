@@ -86,7 +86,7 @@ COPY nextflow/deepprep.nf /opt/DeepPrep/deepprep/nextflow/deepprep.nf
 COPY nextflow/deepprep.common.config /opt/DeepPrep/deepprep/nextflow/deepprep.common.config
 
 RUN chmod +x ${RUN_DIR}/nextflow/run.sh && \
-    cd ${RUN_DIR}/megprep/tools/osl-ephys && pip install -e . 
+    cd ${RUN_DIR}/megprep/tools/osl-ephys && pip install --no-deps -e .
 RUN \
     echo "export DISPLAY=:99" >> ~/.bashrc && \
     echo "export QT_QPA_PLATFORM=xcb" >> ~/.bashrc && \

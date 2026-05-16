@@ -820,6 +820,337 @@ process generate_cohort_static_html_report {
     """
 }
 
+process import_MEG_dataset_native {
+    tag "${dataset_name}"
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir)
+    val dataset_format
+    val file_suffix
+
+    output:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), path('imported_meg_data.txt'), emit: imported_meg_data
+
+    script:
+    script_name = "${params.code_dir}/meg_import_dataset.py"
+    """
+    mkdir -p "${preproc_dir}"
+    python ${script_name} \\
+        --dataset_dir "${dataset_dir}" \\
+        --dataset_format ${dataset_format} \\
+        --file_suffix ${file_suffix} \\
+        --output_file imported_meg_data.txt \\
+        --config "${params.meg_import_config}"
+    """
+}
+
+process meg_preproc_osl_native {
+    tag "${dataset_name}:${raw_subject_basename}"
+    memory { 6.GB * task.attempt }
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path)
+
+    output:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val("${preproc_dir}/${raw_subject_basename}/${raw_subject_basename}_preproc-raw${params.file_suffix}"), emit: preproc_subjects
+
+    script:
+    script_name = "${params.code_dir}/meg_preproc_osl.py"
+    raw_subject_basename = file(orig_raw_path).getBaseName()
+    """
+    python ${script_name} \\
+        --file "${orig_raw_path}" \\
+        --preproc_dir "${preproc_dir}" \\
+        --seed ${params.osl_random_seed} \\
+        --config "${params.preproc_config}"
+    """
+}
+
+process detect_Artifacts_native {
+    tag "${dataset_name}:${raw_subject_basename}"
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val(preproc_raw_path)
+
+    output:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val(preproc_raw_path), val("${preproc_dir}/artifact_report/${raw_subject_parent}/${raw_subject_basename}_bad_channels.txt"), val("${preproc_dir}/artifact_report/${raw_subject_parent}/${raw_subject_basename}_bad_segments.txt"), emit: artifacts
+
+    script:
+    script_name = "${params.code_dir}/meg_detect_artifacts.py"
+    raw_subject_basename = file(preproc_raw_path).getBaseName()
+    raw_subject_parent = file(preproc_raw_path).getParent().getBaseName()
+    """
+    mkdir -p "${preproc_dir}/artifact_report/${raw_subject_parent}"
+    python ${script_name} \\
+        --input "${preproc_raw_path}" \\
+        --output "${preproc_dir}/artifact_report/${raw_subject_parent}" \\
+        --config "${params.artifact_config}"
+    """
+}
+
+process run_ICA_native {
+    tag "${dataset_name}:${raw_subject_basename}"
+    memory { 8.GB * task.attempt }
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val(preproc_raw_path), val(bad_channels), val(bad_segments)
+
+    output:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val(preproc_raw_path), val(bad_channels), val(bad_segments), val("${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/ica_sources.fif"), val("${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_ica.fif"), emit: ica_subjects
+
+    script:
+    script_name = "${params.code_dir}/run_ica.py"
+    raw_subject_basename = file(preproc_raw_path).getBaseName()
+    raw_subject_dir_basename = file(preproc_raw_path).getParent().getBaseName()
+    compute_explained_variance = params.ica_compute_explained_variance ?: false
+    """
+    python ${script_name} \\
+        --raw_file "${preproc_raw_path}" \\
+        --output_dir "${preproc_dir}/${params.ICA_output_dir}" \\
+        --num_IC ${params.num_IC} \\
+        --fname_bad_channels "${bad_channels}" \\
+        --fname_bad_segments "${bad_segments}" \\
+        --seed ${params.ICA_random_seed} \\
+        --compute_explained_variance ${compute_explained_variance}
+    """
+}
+
+process run_IC_label_native {
+    tag "${dataset_name}:${raw_subject_basename}"
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val(preproc_raw_path), val(bad_channels), val(bad_segments), val(ica_source), val(ica_file_path)
+
+    output:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val(preproc_raw_path), val(bad_channels), val(bad_segments), val("${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/marked_components.txt"), emit: labelled_subjects
+
+    script:
+    script_name = "${params.code_dir}/run_ica_label.py"
+    raw_subject_basename = file(preproc_raw_path).getBaseName()
+    raw_subject_dir_basename = file(preproc_raw_path).getParent().getBaseName()
+    """
+    python ${script_name} \\
+        --raw_data_path "${preproc_raw_path}" \\
+        --ica_file "${ica_file_path}" \\
+        --output_dir "${preproc_dir}/${params.ICA_output_dir}" \\
+        --config "${params.ic_label_config}"
+    """
+}
+
+process apply_ICA_native {
+    tag "${dataset_name}:${raw_subject_basename}"
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val(preproc_raw_path), val(bad_channels), val(bad_segments), val(marked_components)
+
+    output:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val("${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif"), val("${target_mri_subject_id}"), emit: clean_subjects
+
+    script:
+    script_name = "${params.code_dir}/apply_ica.py"
+    raw_subject_basename = file(preproc_raw_path).getBaseName()
+    raw_subject_dir_basename = file(preproc_raw_path).getParent().getBaseName()
+    target_mri_subject_id = raw_subject_basename.split('_')[0] + params.anatomy_select_tag
+    """
+    python ${script_name} \\
+        --raw_file "${preproc_raw_path}" \\
+        --ica_file "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_ica.fif" \\
+        --exclude_file "${marked_components}" \\
+        --output_file "${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif" \\
+        --output_dir "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}" \\
+        --fname_bad_channels "${bad_channels}" \\
+        --fname_bad_segments "${bad_segments}"
+    """
+}
+
+process epochs_native {
+    tag "${subject_key[0]}:${subject_key[1]}"
+
+    input:
+    tuple val(subject_key), val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(orig_raw_path), val(analysis_raw_path), val(target_mri_subject_id)
+
+    output:
+    tuple val(subject_key), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val("${preproc_dir}/${params.epoch_output_dir}/${raw_subject_dir_basename}/${raw_subject_basename}-epo.fif"), val(analysis_raw_path), emit: epoch_subjects
+
+    script:
+    script_name = "${params.code_dir}/epochs.py"
+    raw_subject_basename = file(analysis_raw_path).getBaseName()
+    raw_subject_dir_basename = file(analysis_raw_path).getParent().getBaseName()
+    filtered_raw_subject_basename = file(orig_raw_path).getBaseName().replace("_meg_preproc-raw_clean_raw", "").replace("_meg_preproc-raw", "")
+    events_file = orig_raw_path.toString().replaceAll(/_meg\..*/, '_events.tsv')
+    """
+    mkdir -p "${preproc_dir}/${params.epoch_output_dir}/${raw_subject_dir_basename}"
+    python ${script_name} \\
+        --preproc_raw_file "${analysis_raw_path}" \\
+        --events_file "${events_file}" \\
+        --output_epoch_file "${raw_subject_basename}-epo.fif" \\
+        --output_dir "${preproc_dir}/${params.epoch_output_dir}/${raw_subject_dir_basename}" \\
+        --config "${params.epoch_config}"
+    """
+}
+
+process compute_covariance_native {
+    tag "${subject_key[0]}:${subject_key[1]}"
+
+    input:
+    tuple val(subject_key), val(dataset_name), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(raw_subject_path), val(raw_data_file)
+
+    output:
+    tuple val(subject_key), val(output_dir), val(preproc_dir), val("${preproc_dir}/${params.covar_output_dir}/${raw_subject_dir_basename}/bl-cov.fif"), emit: cov_subjects
+
+    script:
+    script_name = "${params.code_dir}/compute_covariance.py"
+    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
+    """
+    python ${script_name} \\
+        --raw_data_file "${raw_data_file}" \\
+        --output_dir "${preproc_dir}/${params.covar_output_dir}/${raw_subject_dir_basename}" \\
+        --visualize ${params.covar_visualize} \\
+        --covar_type ${params.covar_type} \\
+        --config "${params.covar_config}"
+    """
+}
+
+process coregistration_native {
+    tag "${subject_key[0]}:${subject_key[1]}"
+    time '1h'
+
+    input:
+    tuple val(subject_key), val(dataset_name), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(target_mri_subject_id), val(clean_raw_path)
+
+    output:
+    tuple val(subject_key), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val("${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename}/coreg-trans.fif"), emit: trans_subjects
+
+    script:
+    script_name = "${params.code_dir}/coregistration.py"
+    raw_subject_basename = file(clean_raw_path).getBaseName()
+    raw_subject_dir_basename = file(clean_raw_path).getParent().getBaseName()
+    mri_subject_id = target_mri_subject_id ?: raw_subject_basename.split('_')[0]
+    """
+    python ${script_name} \\
+        --raw_file "${clean_raw_path}" \\
+        --subjects_dir "${fs_subjects_dir}/${mri_subject_id}" \\
+        --visualize ${params.meg_visualize} \\
+        --output_dir "${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename}" \\
+        --config "${params.core_config}"
+    """
+}
+
+process forward_solution_native {
+    tag "${key[0]}:${key[1]}"
+
+    input:
+    tuple val(key), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(trans_path), val(epoch_output_dir), val(epoch_preproc_dir), val(epoch_fs_subjects_dir), val(epoch_path), val(clean_raw_path)
+
+    output:
+    tuple val(key), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val("${preproc_dir}/${params.fwd_output_dir}/${raw_subject_dir_basename}/${raw_subject_dir_basename}-fwd.fif"), val(epoch_path), val(clean_raw_path), emit: fwd_subjects
+
+    script:
+    dataset_name = key[0]
+    raw_subject_dir_basename = key[1]
+    script_name = "${params.code_dir}/forward_solution.py"
+    mri_subject_id = raw_subject_dir_basename.split('_')[0]
+    mri_subject_dir = "${fs_subjects_dir}/${mri_subject_id}"
+    """
+    mkdir -p "${preproc_dir}/${params.fwd_output_dir}/${raw_subject_dir_basename}"
+    python ${script_name} \\
+        --epoch_file "${epoch_path}" \\
+        --epoch_label ${params.fwd_epoch_label}  \\
+        --output_dir "${preproc_dir}/${params.fwd_output_dir}/${raw_subject_dir_basename}" \\
+        --trans_file "${trans_path}" \\
+        --mri_subject_dir "${mri_subject_dir}" \\
+        --config "${params.fwd_config}"
+    """
+}
+
+process source_imaging_native {
+    tag "${key[0]}:${key[1]}"
+
+    input:
+    tuple val(key), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(fwd_file), val(epoch_path), val(clean_raw_path), val(cov_output_dir), val(cov_preproc_dir), val(bl_cov_file)
+
+    output:
+    tuple val(key), val(output_dir), val(preproc_dir), val("${preproc_dir}/${params.src_output_dir}/${raw_subject_dir_basename}"), emit: source_subjects
+
+    script:
+    dataset_name = key[0]
+    raw_subject_dir_basename = key[1]
+    raw_subject_path = params.src_type == 'epochs' ? epoch_path : clean_raw_path
+    if (!(params.src_type in ['epochs', 'raw'])) {
+        error "Invalid src_type: ${params.src_type}. Please specify 'epochs' or 'raw'."
+    }
+    script_name = "${params.code_dir}/source_localization.py"
+    """
+    mkdir -p "${preproc_dir}/${params.src_output_dir}/${raw_subject_dir_basename}"
+    python ${script_name} \\
+        --data_mode ${params.src_type} \\
+        --data_file "${raw_subject_path}"  \\
+        --fs_subjects_dir "${fs_subjects_dir}" \\
+        --output_dir "${preproc_dir}/${params.src_output_dir}/${raw_subject_dir_basename}" \\
+        --forward_dir "${preproc_dir}/${params.fwd_output_dir}" \\
+        --visualize ${params.meg_visualize} \\
+        --noise_covariance_dir "${preproc_dir}/${params.covar_output_dir}" \\
+        --config "${params.src_config}"
+    """
+}
+
+process generate_static_html_report_native {
+    tag "${dataset_name}"
+
+    input:
+    tuple val(dataset_name), val(output_dir), val(preproc_dir), val(source_artifacts)
+
+    output:
+    tuple val(dataset_name), val(output_dir), val(preproc_dir), path("static_html_report_${dataset_name}.done"), emit: dataset_reports
+
+    script:
+    report_script = "${params.code_dir}/reports/static_html_report.py"
+    manifest_json = JsonOutput.prettyPrint(JsonOutput.toJson([
+        manifest_schema_version: 2,
+        steps_raw: (params.steps ?: 'meg_all').toString(),
+        parsed: parseMegPipelineSteps(params.steps ?: 'meg_all'),
+        params_snapshot: [
+            dataset_name: dataset_name,
+            output_dir: output_dir,
+            preproc_dir: preproc_dir,
+            code_dir: params.code_dir?.toString(),
+            fs_subjects_dir: params.fs_subjects_dir?.toString(),
+            dataset_format: params.dataset_format?.toString(),
+            covar_type: params.covar_type?.toString(),
+            src_type: params.src_type?.toString(),
+            is_bids: params.is_bids
+        ],
+        workflow_meta: [
+            session_id: workflow.sessionId?.toString() ?: '',
+            run_name: workflow.runName?.toString() ?: '',
+            start: workflow.start?.toString() ?: '',
+            nextflow_version: workflow.nextflow?.version?.toString() ?: '',
+            launch_dir: workflow.launchDir?.toString() ?: '',
+            project_dir: workflow.projectDir?.toString() ?: ''
+        ]
+    ]))
+    """
+    set -euo pipefail
+    mkdir -p "${preproc_dir}/logs"
+    cat > "${preproc_dir}/logs/megprep_run_manifest.json" <<'EOF_MANIFEST'
+${manifest_json}
+EOF_MANIFEST
+
+    python "${report_script}" \\
+        --report_root "${output_dir}" \\
+        --output_dir "${output_dir}/static_html_report" \\
+        --bad_channel_threshold ${params.bad_channel_threshold} \\
+        --bad_segment_threshold ${params.bad_segment_threshold} \\
+        --coreg_mean_threshold ${params.coreg_mean_threshold} \\
+        --coreg_max_threshold ${params.coreg_max_threshold} \\
+        --epoch_reject_rate_threshold ${params.epoch_reject_rate_threshold} \\
+        --task_log_mode "${params.static_task_log_mode}" \\
+        --zip_output false
+
+    echo "Static HTML report generated at ${output_dir}/static_html_report" > "static_html_report_${dataset_name}.done"
+    """
+}
+
 import java.nio.file.Path
 class AnatOutput {
     String mri_subject_id
@@ -916,6 +1247,141 @@ workflow {
         def sanitizeDatasetName = { String rawName ->
             rawName.replace(' ', '_').replaceAll(/[^A-Za-z0-9_.-]/, '_')
         }
+        def cohortEngine = (params.cohort_engine ?: 'native').toString().toLowerCase()
+        if (cohortEngine == 'native') {
+            if (cfg.runAnatomy) {
+                error "Native cohort currently supports MEG workflows with pre-existing anatomy only. Use --cohort_engine nested for steps=${params.steps}."
+            }
+
+            log.info "Native cohort mode enabled: dataset root=${params.dataset_dir}, engine=${cohortEngine}"
+
+            native_dataset_ch = Channel
+                .fromPath("${params.dataset_dir}/*", type: 'dir', checkIfExists: true)
+                .map { datasetPath ->
+                    def originalName = datasetPath.getName()
+                    def datasetName = sanitizeDatasetName(originalName)
+                    def outputDir = "${params.output_dir}/datasets/${datasetName}"
+                    def preprocDir = "${outputDir}/preprocessed"
+                    def fsSubjectsDir = "${params.fs_subjects_dir}/${datasetName}"
+                    def t1Root = params.cohort_t1_root?.toString()
+                    def t1Dir = t1Root ? (new File(t1Root, originalName).isDirectory() ? new File(t1Root, originalName).toString() : t1Root) : datasetPath.toString()
+                    tuple(datasetName, datasetPath.toString(), outputDir, preprocDir, fsSubjectsDir, t1Dir)
+                }
+
+            def native_report_input_ch
+
+            if (cfg.primary == 'report') {
+                native_report_input_ch = native_dataset_ch
+                    .map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir ->
+                        tuple(dataset_name, output_dir, preproc_dir, true)
+                    }
+            } else {
+                native_imported = import_MEG_dataset_native(native_dataset_ch, params.dataset_format, params.file_suffix)
+
+                native_raw_subject_ch = native_imported.imported_meg_data
+                    .flatMap { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, imported_file ->
+                        imported_file.readLines()
+                            .collect { it.trim() }
+                            .findAll { it }
+                            .collect { raw_subject_path ->
+                                tuple(dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, raw_subject_path)
+                            }
+                    }
+
+                native_preproc = meg_preproc_osl_native(native_raw_subject_ch)
+                native_artifacts = detect_Artifacts_native(native_preproc.preproc_subjects)
+
+                def report_source_ch = native_artifacts.artifacts.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, preproc_raw_path, bad_channels, bad_segments ->
+                    tuple([dataset_name, output_dir, preproc_dir], bad_channels)
+                }
+
+                def native_clean_subject_ch = null
+                def native_epoch_subject_ch = null
+
+                if (cfg.megStage >= 1 && !cfg.skipIca) {
+                    native_ica = run_ICA_native(native_artifacts.artifacts)
+                    native_labels = run_IC_label_native(native_ica.ica_subjects)
+                    native_clean = apply_ICA_native(native_labels.labelled_subjects)
+                    native_clean_subject_ch = native_clean.clean_subjects
+                    report_source_ch = native_clean_subject_ch.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
+                        tuple([dataset_name, output_dir, preproc_dir], clean_raw_path)
+                    }
+                }
+
+                if (cfg.megStage >= 2) {
+                    def epoch_input_ch
+                    if (cfg.skipIca) {
+                        epoch_input_ch = native_preproc.preproc_subjects
+                            .map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, preproc_raw_path ->
+                                def subjectKey = [dataset_name, new File(preproc_raw_path.toString()).getParentFile().getName()]
+                                tuple(subjectKey, dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, preproc_raw_path, '')
+                            }
+                    } else {
+                        epoch_input_ch = native_clean_subject_ch
+                            .map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
+                                def subjectKey = [dataset_name, new File(clean_raw_path.toString()).getParentFile().getName()]
+                                tuple(subjectKey, dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id)
+                            }
+                    }
+                    native_epochs = epochs_native(epoch_input_ch)
+                    native_epoch_subject_ch = native_epochs.epoch_subjects
+                    report_source_ch = native_epoch_subject_ch.map { key, output_dir, preproc_dir, fs_subjects_dir, epoch_path, analysis_raw_path ->
+                        tuple([key[0], output_dir, preproc_dir], epoch_path)
+                    }
+                }
+
+                if (cfg.megStage >= 3) {
+                    def covariance_inputs_ch
+                    if (params.covar_type == 'epochs') {
+                        covariance_inputs_ch = native_clean_subject_ch
+                            .map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
+                                def subjectKey = [dataset_name, new File(clean_raw_path.toString()).getParentFile().getName()]
+                                tuple(subjectKey, dataset_name, output_dir, preproc_dir, fs_subjects_dir, clean_raw_path, clean_raw_path.toString())
+                            }
+                    } else if (params.covar_type == 'raw') {
+                        covariance_inputs_ch = native_clean_subject_ch
+                            .map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
+                                def clean_path = clean_raw_path.toString()
+                                if (clean_path.contains("task-${params.raw_covariance_task_id}")) {
+                                    return null
+                                }
+                                def raw_data_file = clean_path.replaceAll(/task-[^_]+/, "task-${params.raw_covariance_task_id}")
+                                def subjectKey = [dataset_name, new File(clean_path).getParentFile().getName()]
+                                tuple(subjectKey, dataset_name, output_dir, preproc_dir, fs_subjects_dir, clean_raw_path, raw_data_file)
+                            }
+                            .filter { it != null }
+                            .filter { subjectKey, dataset_name, output_dir, preproc_dir, fs_subjects_dir, clean_raw_path, raw_data_file ->
+                                new File(raw_data_file.toString()).exists()
+                            }
+                    } else {
+                        error "Unsupported covar_type: ${params.covar_type}."
+                    }
+
+                    native_cov = compute_covariance_native(covariance_inputs_ch)
+                    native_coreg_inputs = native_clean_subject_ch.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
+                        def subjectKey = [dataset_name, new File(clean_raw_path.toString()).getParentFile().getName()]
+                        tuple(subjectKey, dataset_name, output_dir, preproc_dir, fs_subjects_dir, target_mri_subject_id, clean_raw_path)
+                    }
+                    native_trans = coregistration_native(native_coreg_inputs)
+                    native_fwd_inputs = native_trans.trans_subjects.combine(native_epoch_subject_ch, by: 0)
+                    native_fwds = forward_solution_native(native_fwd_inputs)
+                    native_source_inputs = native_fwds.fwd_subjects.combine(native_cov.cov_subjects, by: 0)
+                    native_source = source_imaging_native(native_source_inputs)
+                    report_source_ch = native_source.source_subjects.map { key, output_dir, preproc_dir, source_file ->
+                        tuple([key[0], output_dir, preproc_dir], source_file)
+                    }
+                }
+
+                native_report_input_ch = report_source_ch
+                    .groupTuple()
+                    .map { key, source_artifacts ->
+                        tuple(key[0], key[1], key[2], source_artifacts)
+                    }
+            }
+
+            native_reports = generate_static_html_report_native(native_report_input_ch)
+            generate_cohort_static_html_report(native_reports.dataset_reports.map { dataset_name, output_dir, preproc_dir, marker -> marker }.collect())
+        } else if (cohortEngine == 'nested') {
         def childPipelineFile = params.cohort_child_pipeline_file?.toString()
         if (!childPipelineFile) {
             try {
@@ -958,6 +1424,9 @@ workflow {
 
         cohort_dataset_results = run_cohort_dataset(cohort_dataset_ch)
         generate_cohort_static_html_report(cohort_dataset_results.completion_marker.collect())
+        } else {
+            error "Unsupported cohort_engine: ${params.cohort_engine}. Use native or nested."
+        }
     } else {
 
     def snapshot = [

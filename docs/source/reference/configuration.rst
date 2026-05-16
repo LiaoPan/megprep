@@ -144,11 +144,17 @@ Global Paths and Execution Settings
      - ``false``
      - Treat ``dataset_dir`` as a collection root and let Nextflow expand each
        immediate child directory into an independent dataset run.
+   * - ``cohort_engine``
+     - string
+     - ``native``
+     - Cohort execution engine. ``native`` runs one Nextflow DAG over dataset
+       tuple channels and exposes per-step tasks in the terminal. ``nested``
+       preserves the older child-Nextflow-per-dataset implementation and is a
+       fallback for workflows not yet covered by the native engine.
    * - ``cohort_max_parallel``
      - integer
      - ``2``
-     - Maximum number of dataset-level child runs to execute concurrently in
-       cohort mode.
+     - Maximum number of datasets to execute concurrently in cohort mode.
    * - ``cohort_t1_root``
      - path
      - unset

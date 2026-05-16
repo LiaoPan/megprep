@@ -219,10 +219,11 @@ docker run ... cmrlab/megprep:<tag> ... --static_task_log_mode all-command-log
 
 For a directory that contains many independent MEG datasets, use **`--cohort`**.
 MEGPrep treats each immediate child directory as one dataset, runs the existing
-single-dataset pipeline into an isolated output folder, and then builds a
-cohort-level static report that links back to each dataset report. The cohort
-runner is managed by Nextflow: dataset directories are expanded into a channel
-and multiple datasets can run concurrently.
+dataset pipeline into an isolated output folder, and then builds a cohort-level
+static report that links back to each dataset report. The default cohort engine
+is `native`: Nextflow expands dataset directories into tuple channels and shows
+the real process tasks for all datasets in one run. Use `--cohort_engine nested`
+only when you need the older child-Nextflow-per-dataset behavior.
 In cohort mode, FreeSurfer/DeepPrep outputs are also isolated by dataset under
 `<fs_subjects_dir>/<dataset_name>` so repeated MRI subject IDs such as `sub-01`
 do not overwrite each other.
@@ -238,6 +239,7 @@ docker run -it --rm \
   --fs_license_file /fs_license.txt --fs_subjects_dir /smri \
   --steps meg_artifacts \
   --cohort \
+  --cohort_engine native \
   --cohort_max_parallel 4
 ```
 
@@ -256,9 +258,10 @@ Use a milestone such as `--steps meg_artifacts` or `--steps meg_ica` for a quick
 first pass across many public datasets, then resume selected datasets with a
 deeper step when needed.
 
-Use `--cohort_max_parallel N` to control dataset-level concurrency. This is in
-addition to Nextflow's normal process-level parallelism inside each dataset, so
-set it according to available CPU, memory, and I/O capacity.
+Use `--cohort_max_parallel N` to control dataset-level concurrency. In the
+default native engine, this works with Nextflow's normal process-level
+parallelism; in nested mode, it limits how many child dataset pipelines are
+launched at once. Set it according to available CPU, memory, and I/O capacity.
 
 ### Using pipeline steps with Docker
 
@@ -267,6 +270,7 @@ The image entrypoint is [`nextflow/run_for_docker.sh`](nextflow/run_for_docker.s
 - **After the image name**, pass **`-s`** / **`--steps`** (forwarded to Nextflow as `--steps`). If you omit it, the workflow uses **`params.steps`** from the config (default in the baked-in image config is **`meg_all`**).
 - **Modifiers** that contain commas must be **quoted for the shell**, e.g. `--steps 'meg_epochs,skip_ica'`.
 - **Cohort mode** uses `--cohort`; in that mode `-i` / `--input` should point to a directory whose immediate children are datasets, and `--fs_subjects_dir` is used as the base directory for per-dataset FreeSurfer outputs.
+- **Cohort engine** defaults to `--cohort_engine native`. Use `nested` to fall back to the previous child-pipeline implementation.
 - You can instead set **`steps = '...'`** inside the Nextflow file you mount at **`/program/nextflow/nextflow.config`**; a container **`--steps`** / **`-s`** argument **overrides** that for the run.
 - **`-s`** here is the **MEGPrep** flag (input path is **`-i`**), not Docker’s **`-i`** (interactive). Typical pattern: `docker run ... cmrlab/megprep:<tag> -i /input -o /output ... --steps all`.
 - The Docker entrypoint copies the mounted config to `/program/nextflow/run_nextflow.config`, applies command-line path overrides, runs Nextflow with that file, then copies it to `<output>/nextflow.config` and snapshots it into `preprocessed/logs/` for the static HTML report.
@@ -310,6 +314,7 @@ docker run -it --rm \
 | `-s`, `--steps` | **Nextflow (`meg_anat_pipeline_for_docker.nf`):** sets `params.steps` (e.g. `all`, `meg_all`, `anatomy`, `report`). With **Docker**, pass this **after the image name**; see [Using pipeline steps with Docker](#using-pipeline-steps-with-docker). Same semantics as [Pipeline steps](#pipeline-steps). |
 | `-r`, `--view-report` | Run Streamlit to view the report (does not run Nextflow) |
 | `--cohort` | Treat the input directory as a collection of datasets, run each child dataset separately through a Nextflow dataset channel, and generate a cohort-level static report |
+| `--cohort_engine` | Cohort execution engine: `native` (default, one Nextflow DAG over dataset tuple channels) or `nested` (legacy child Nextflow run per dataset) |
 | `--cohort_max_parallel` | Maximum number of datasets to run concurrently in cohort mode |
 | `--static_task_log_mode` | Static report task log bundling mode: `all-command-log` (default), `failed`, or `none` |
 | `--fs_license_file` | Specify the FreeSurfer license file path |

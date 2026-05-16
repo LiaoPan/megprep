@@ -20,6 +20,7 @@ MEG_ONLY=false
 VIEW_REPORT=false
 COHORT_MODE=false
 COHORT_MAX_PARALLEL="${COHORT_MAX_PARALLEL:-2}"
+COHORT_ENGINE="${COHORT_ENGINE:-native}"
 NEXTFLOW_FILE="/program/nextflow/meg_pipeline.nf"
 STREAMLIT_APP_PATH="/program/megprep/reports/reports.py"
 COHORT_REPORT_PATH="/program/megprep/reports/cohort_static_html_report.py"
@@ -52,6 +53,7 @@ while [[ "$#" -gt 0 ]]; do
 
         # cohort mode
         --cohort) COHORT_MODE=true ;;
+        --cohort_engine|--cohort-engine) COHORT_ENGINE="$2"; shift ;;
         --cohort_max_parallel|--cohort-max-parallel) COHORT_MAX_PARALLEL="$2"; shift ;;
 
         # static report options
@@ -69,6 +71,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  -s, --steps           Same as Nextflow --steps / params.steps (e.g. all, meg_all, anatomy, report, meg_epochs,skip_ica)"
             echo "  -r, --view-report     Run Streamlit to view the report (does not run Nextflow)"
             echo "  --cohort              Treat --input as a directory of datasets; isolate each child's output and FreeSurfer SUBJECTS_DIR"
+            echo "  --cohort_engine       Cohort execution engine: native or nested (default: native)"
             echo "  --cohort_max_parallel Number of datasets to run concurrently in cohort mode (default: 2)"
             echo "  --static_task_log_mode failed|all-command-log|none"
             echo "  --fs_license_file     Specify the FreeSurfer license file"
@@ -133,8 +136,17 @@ case "$STATIC_TASK_LOG_MODE" in
         ;;
 esac
 
+case "$COHORT_ENGINE" in
+    native|nested) ;;
+    *)
+        echo "Error: invalid --cohort_engine '$COHORT_ENGINE' (expected native or nested)"
+        exit 1
+        ;;
+esac
+
 echo "Using configuration file: $CONFIG_FILE"
 echo "Static report task log mode: $STATIC_TASK_LOG_MODE"
+echo "Cohort engine: $COHORT_ENGINE"
 
 write_run_config() {
     local run_input_dir="$1"
@@ -317,6 +329,7 @@ if [ "$COHORT_MODE" = true ]; then
 
     cohort_args=(
         --cohort true
+        --cohort_engine "$COHORT_ENGINE"
         --cohort_max_parallel "$COHORT_MAX_PARALLEL"
         --cohort_child_pipeline_file "$NEXTFLOW_FILE"
         --cohort_child_config "$RUN_CONFIG_FILE"
@@ -332,6 +345,7 @@ if [ "$COHORT_MODE" = true ]; then
     fi
 
     echo "Cohort parallel datasets: $COHORT_MAX_PARALLEL"
+    echo "Cohort engine: $COHORT_ENGINE"
     nextflow run "${NEXTFLOW_FILE}" \
         -c "${RUN_CONFIG_FILE}" \
         "${cohort_args[@]}" \
