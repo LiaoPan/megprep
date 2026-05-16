@@ -3,13 +3,12 @@ set -euo pipefail
 
 # Cohort runner: each immediate child directory under DATASET_ROOT is treated as
 # one MEGPrep dataset. Nextflow expands those datasets into a cohort channel,
-# runs dataset-level child pipelines concurrently, and then builds a cohort-level
-# static HTML report from the isolated dataset outputs.
+# runs one shared process DAG, and then builds a cohort-level static HTML report
+# from the isolated dataset outputs.
 #
 # Paths below are placeholders. Override before running, for example:
 #   DATASET_ROOT=/path/to/megqc_cohort INPUT \
 #   OUTPUT_ROOT=/path/to/megqc_cohort_OUTPUT \
-#   COHORT_MAX_PARALLEL=4 \
 #   bash run_MultiDatasets.sh
 
 PIPELINE="${PIPELINE:-nextflow/meg_anat_pipeline_for_docker.nf}"
@@ -21,8 +20,6 @@ T1_ROOT="${T1_ROOT:-}"
 STEPS="${STEPS:-meg_ica}"
 RESUME="${RESUME:--resume}"
 STATIC_TASK_LOG_MODE="${STATIC_TASK_LOG_MODE:-}"
-COHORT_MAX_PARALLEL="${COHORT_MAX_PARALLEL:-2}"
-COHORT_ENGINE="${COHORT_ENGINE:-native}"
 
 read_static_task_log_mode() {
     [ -f "$CONFIG" ] || return 0
@@ -35,14 +32,6 @@ case "$STATIC_TASK_LOG_MODE" in
     failed|all-command-log|none) ;;
     *)
         echo "Invalid STATIC_TASK_LOG_MODE: $STATIC_TASK_LOG_MODE (expected failed, all-command-log, or none)" >&2
-        exit 1
-        ;;
-esac
-
-case "$COHORT_ENGINE" in
-    native|nested) ;;
-    *)
-        echo "Invalid COHORT_ENGINE: $COHORT_ENGINE (expected native or nested)" >&2
         exit 1
         ;;
 esac
@@ -69,9 +58,7 @@ echo "MRI root:             $FS_SUBJECTS_ROOT"
 echo "Pipeline:             $PIPELINE_ABS"
 echo "Config:               $CONFIG_ABS"
 echo "Steps:                $STEPS"
-echo "Parallel datasets:    $COHORT_MAX_PARALLEL"
 echo "Task log mode:        $STATIC_TASK_LOG_MODE"
-echo "Cohort engine:        $COHORT_ENGINE"
 if [ -n "$T1_ROOT" ]; then
     echo "T1 root:              $T1_ROOT"
 else
@@ -83,10 +70,6 @@ nextflow run "$PIPELINE_ABS" \
     -c "$CONFIG_ABS" \
     -w "${OUTPUT_ROOT}/work/cohort_driver" \
     --cohort true \
-    --cohort_engine "$COHORT_ENGINE" \
-    --cohort_max_parallel "$COHORT_MAX_PARALLEL" \
-    --cohort_child_pipeline_file "$PIPELINE_ABS" \
-    --cohort_child_config "$CONFIG_ABS" \
     --cohort_t1_root "$T1_ROOT" \
     --steps "$STEPS" \
     --dataset_dir "$DATASET_ROOT" \

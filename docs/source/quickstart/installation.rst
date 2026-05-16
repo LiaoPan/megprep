@@ -116,6 +116,7 @@ full MEG workflow with existing anatomy.
      --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory
      --t1_dir              Specify the T1 image directory
      --t1_input_type       Specify the T1 input type
+     --t1_dicom_series_glob Optional relative glob for selecting DICOM series
      --resume              Resume the previous run
 
 Common ``--steps`` values are ``meg_all`` for full MEG processing with existing

@@ -19,784 +19,6 @@ workflow.onComplete {
     log.info "Execution duration: $workflow.duration"
 }
 
-// =============================================================================
-// MRI anatomy preprocessing
-// =============================================================================
-
-
-process import_MRI_dataset {
-    input:
-    path dataset_dir
-
-    output:
-    path 'imported_t1_data.txt', emit: imported_t1_data
-
-    script:
-    script_name = "${params.code_dir}/mri_import_dataset.py"
-    """
-    mkdir -p ${params.preproc_dir}
-    python ${script_name} \\
-        --bids_dir ${dataset_dir} \\
-        --config "${params.mri_import_config}" \\
-        --output_file imported_t1_data.txt
-    """
-}
-
-process read_nifti_files {
-
-    input:
-    path input_file
-
-    output:
-    tuple val(sub_id), path(nii_file),emit: output_ch
-
-    script:
-    """
-    while IFS= read -r line; do
-        sub_id=\$(echo "\$line" | awk -F : '{print \$1}' | xargs)
-        nii_files=\$(echo "\$line" | awk -F : '{print \$2}' | sed "s/[][]//g" | xargs)
-
-        IFS=',' read -ra files <<< "\$nii_files"
-        for nii_file in "\${files[@]}"; do
-            echo "\$sub_id \$nii_file" | xargs
-        done
-    done < ${input_file}
-    """
-}
-
-// Convert T1-weighted DICOM data to NIfTI.
-process dcm2niix {
-    tag "DICOM to Nifti"
-
-    input:
-    path t1_dicom_dir
-
-    output:
-    path "${t1_dicom_dir}/${t1_dicom_dir}.nii.gz"
-
-    script:
-    dcm_tag = "1004-t1_mprage_sag_iso_mww64CH_S3_DIS3D"
-    output_file = "${t1_dicom_dir}/${t1_dicom_dir}.nii.gz"
-
-    """
-    echo "Starting DICOM to NIfTI conversion for directory: ${t1_dicom_dir}"
-
-    # Check if the output file already exists, if it does, skip the conversion
-    if [ -f ${output_file} ]; then
-        echo "Output file ${output_file} already exists. Skipping conversion."
-    else
-        echo "Output file does not exist. Starting conversion."
-        dcm2niix -o ${t1_dicom_dir} -z y -f ${t1_dicom_dir} ${t1_dicom_dir}/${dcm_tag}
-    fi
-
-    echo "Finished DICOM to NIfTI conversion."
-    """
-}
-
-
-// Run FreeSurfer recon-all and build the head surface.
-process run_freesurfer {
-    tag "${subject_name}"
-
-    input:
-    val anat_file
-    val subject_name
-    path fs_subjects_dir
-
-    output:
-    path "${fs_subjects_dir}/${subject_name}", emit: fs_subject_dir
-    path "${fs_subjects_dir}/${subject_name}/mri/seghead.mgz"
-    path "${fs_subjects_dir}/${subject_name}/surf/lh.seghead"
-    val(subject_name),emit: mri_subject_id
-
-    script:
-    """
-    if [ ! -d "${params.fs_subjects_dir}" ]; then
-        echo "Directory ${params.fs_subjects_dir} does not exist. Creating it now."
-        mkdir -p "${params.fs_subjects_dir}"
-    fi
-
-    recon-all -sd ${params.fs_subjects_dir} -all -i $anat_file -s $subject_name
-    recon-all -sd ${params.fs_subjects_dir} -all -s $subject_name -3T -openmp 4
-    mkheadsurf -sd ${params.fs_subjects_dir} -s $subject_name -srcvol T1.mgz -thresh1 30
-    """
-}
-
-// Run DeepPrep as an alternative anatomical preprocessing backend.
-process run_deepprep {
-    tag "${subject_name}"
-//     debug true
-//     publishDir "${fs_subjects_dir}", mode: 'copy'
-
-    input:
-    path anat_bids_dir
-    val subject_name
-    path fs_subjects_dir
-    path preproc_dir
-//     val mri_subject_name
-
-    output:
-//     path "${preproc_dir}/deepprep/Recon/*"
-    val(subject_name),emit:mri_subject_id
-    path "${fs_subjects_dir}/*/mri/brain.mgz"
-    path "${fs_subjects_dir}/*/surf/lh.pial"
-
-
-    script:
-
-//     /opt/DeepPrep/deepprep/deepprep.sh  ${params.t1_bids_dir} ${output_dir} participant \
-//         --participant_label ${subject_name} \
-//         --skip_bids_validation \
-//         --anat_only \
-//         --fs_license_file /fs_license.txt \
-//         --device ${params.deepprep_device} \
-//         --subject_id ${params.mri_select_subject_id} \
-//         --session_id ${params.mri_select_session_id} \
-//         --task ${params.mri_select_task} \
-//         --run_id ${params.mri_select_run_id} \
-//         --resume
-
-    output_dir="${params.preproc_dir}/deepprep"
-    """
-    if [ ! -d "${params.fs_subjects_dir}" ]; then
-        echo "Directory ${params.fs_subjects_dir} does not exist. Creating it now."
-        mkdir -p "${params.fs_subjects_dir}"
-    fi
-
-    /opt/DeepPrep/deepprep/deepprep.sh  ${params.t1_bids_dir} ${output_dir} participant \
-        --participant_label ${subject_name} \
-        --skip_bids_validation \
-        --anat_only \
-        --fs_license_file /fs_license.txt \
-        --device ${params.deepprep_device} \
-        --mri_import_config "${params.mri_import_config}" \
-        --resume
-
-    kill -9 \$(pgrep redis-server)
-    cp -rf ${output_dir}/Recon/* ${fs_subjects_dir}/
-    """
-}
-
-// Build the FreeSurfer head surface after external reconstruction.
-process run_mkheadsurf {
-    tag "${subject_name}"
-
-    input:
-    val subject_name
-    path fs_subjects_dir
-
-    output:
-    path "${fs_subjects_dir}/${subject_name}", emit: fs_subject_dir
-    path "${fs_subjects_dir}/${subject_name}/mri/seghead.mgz"
-    path "${fs_subjects_dir}/${subject_name}/surf/lh.seghead"
-    val(subject_name),emit: mri_subject_id
-
-    script:
-    """
-    mkheadsurf -sd ${fs_subjects_dir} -s $subject_name -srcvol T1.mgz -thresh1 30
-    """
-}
-
-// Generate the BEM model from the anatomical reconstruction.
-process generate_bem {
-    tag "${subject_name}"
-
-    input:
-    val subject_dir
-    val subject_name
-    val config
-    path fs_subjects_dir
-
-    output:
-    path "${fs_subjects_dir}/${subject_basename}/bem/*"
-    path "${fs_subjects_dir}", emit: fs_subjects_dir
-    tuple val(subject_name),path("${fs_subjects_dir}"), emit: mri_subject_id
-
-    script:
-    script_name = "${params.code_dir}/generate_bem.py"
-    subject_basename = file(subject_dir).getBaseName()
-    """
-    python3 ${script_name} \\
-        --subject_dir ${subject_dir} \\
-        --config "${params.bem_config}" \\
-        --output_dir ${fs_subjects_dir}/${subject_basename}/bem
-    """
-}
-
-
-// =============================================================================
-// MEG preprocessing
-// =============================================================================
-
-// Discover MEG input files from the configured dataset.
-process import_MEG_dataset {
-
-    input:
-    path dataset_dir
-    val dataset_format
-    val file_suffix
-
-    output:
-    path 'imported_meg_data.txt',emit: imported_meg_data
-
-//     publishDir "${params.preproc_dir}", mode: 'copy'
-
-    script:
-    script_name = "${params.code_dir}/meg_import_dataset.py"
-    """
-    mkdir -p ${params.preproc_dir}
-    python ${script_name} \\
-        --dataset_dir ${dataset_dir} \\
-        --dataset_format ${dataset_format} \\
-        --file_suffix ${file_suffix} \\
-        --output_file imported_meg_data.txt \\
-        --config "${params.meg_import_config}"
-    """
-}
-
-process meg_preproc_osl {
-    tag "${raw_subject_basename}"
-
-    memory { 6.GB * task.attempt }
-
-    input:
-    path dataset_dir
-    val raw_subject_path
-    path preproc_dir
-    val preproc_config
-
-    output:
-    path "${preproc_dir}/${raw_subject_basename}/${raw_subject_basename}_preproc-raw${params.file_suffix}"
-
-    script:
-    script_name = "${params.code_dir}/meg_preproc_osl.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    """
-    python ${script_name} \\
-        --file ${raw_subject_path} \\
-        --preproc_dir ${preproc_dir} \\
-        --seed ${params.osl_random_seed} \\
-        --config "${preproc_config}"
-    """
-}
-
-
-// Detect bad channels and bad time segments.
-process detect_Artifacts {
-    tag "${raw_subject_basename}"
-
-    input:
-    path preproc_dir
-    val raw_subject_path
-
-    output:
-    path "${preproc_dir}/artifact_report/${raw_subject_parent}/*_bad_channels.txt",emit: bad_channels
-    path "${preproc_dir}/artifact_report/${raw_subject_parent}/*_bad_segments.txt",emit: bad_segments // MNE annotations
-    val "${raw_subject_path}",emit: preproc_subject_paths
-
-    script:
-    script_name = "${params.code_dir}/meg_detect_artifacts.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_parent = file(raw_subject_path).getParent().getBaseName()
-    """
-    mkdir -p ${preproc_dir}/artifact_report/${raw_subject_parent}
-    echo ${raw_subject_path}
-    python ${script_name} \\
-        --input ${raw_subject_path} \\
-        --output ${preproc_dir}/artifact_report/${raw_subject_parent} \\
-        --config "${params.artifact_config}"
-    """
-}
-
-
-
-process run_ICA {
-    tag "${raw_subject_basename}"
-
-    memory { 8.GB * task.attempt }
-
-    input:
-    path preproc_dir
-    val raw_subject_path
-    path bad_channels
-    path bad_segments
-
-    output:
-    path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/ica_results/*.png"
-    path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/ica_explained_var.jl", optional: true, emit:ica_expvars
-    path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/ica_sources.fif",emit: ica_sources
-    path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/*_ica.fif",emit: ica_fif_paths
-    val "${raw_subject_path}",emit: preproc_subject_paths
-
-    script:
-    script_name = "${params.code_dir}/run_ica.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-    compute_explained_variance = params.ica_compute_explained_variance ?: false
-    """
-    mkdir -p ica_report
-    python ${script_name} \\
-        --raw_file $raw_subject_path \\
-        --output_dir ${preproc_dir}/${params.ICA_output_dir} \\
-        --num_IC ${params.num_IC} \\
-        --fname_bad_channels ${bad_channels} \\
-        --fname_bad_segments ${bad_segments} \\
-        --seed ${params.ICA_random_seed} \\
-        --compute_explained_variance ${compute_explained_variance}
-    """
-}
-
-process run_IC_label {
-//     debug true
-    tag "${raw_subject_basename}"
-
-    input:
-    path preproc_dir
-    val raw_subject_path
-    path ica_file_path
-    path ica_source
-
-    output:
-    path "${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/marked_components.txt",emit:marked_components
-    val "${raw_subject_path}",emit: preproc_subject_paths
-
-    script:
-    script_name = "${params.code_dir}/run_ica_label.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-    """
-    python ${script_name} \\
-        --raw_data_path ${raw_subject_path} \\
-        --ica_file ${ica_file_path} \\
-        --output_dir ${preproc_dir}/${params.ICA_output_dir} \\
-        --config "${params.ic_label_config}"
-    """
-}
-
-process apply_ICA {
-    tag "${raw_subject_basename}"
-
-    input:
-    path preproc_dir
-    val raw_subject_path
-    path marked_components
-    path bad_channels
-    path bad_segments
-
-    output:
-    path "${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif",emit: preproc_subject_paths
-    tuple val("${target_mri_subject_id}"),val("${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif"), emit: target_mri_subject_id
-
-    script:
-    script_name = "${params.code_dir}/apply_ica.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-    target_mri_subject_id = raw_subject_basename.split('_')[0] + params.anatomy_select_tag
-    """
-    python ${script_name} \\
-        --raw_file ${raw_subject_path} \\
-        --ica_file ${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_ica.fif \\
-        --exclude_file ${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename}/marked_components.txt \\
-        --output_file ${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_basename}_clean_raw.fif \\
-        --output_dir ${preproc_dir}/${params.ICA_output_dir}/${raw_subject_dir_basename} \\
-        --fname_bad_channels ${bad_channels} \\
-        --fname_bad_segments ${bad_segments}
-    """
-}
-
-
-process epochs {
-    tag "${raw_subject_basename}"
-
-    input:
-    path dataset_dir
-    path preproc_dir
-    val raw_subject_path
-    val events_files
-
-    output:
-    val "${preproc_dir}/${params.epoch_output_dir}/${raw_subject_dir_basename}/${raw_subject_basename}-epo.fif",emit: preproc_subject_paths
-    tuple val("${raw_subject_dir_basename}"),val("${preproc_dir}/${params.epoch_output_dir}/${raw_subject_dir_basename}/${raw_subject_basename}-epo.fif"),emit: meg_subject_id
-
-    script:
-    script_name = "${params.code_dir}/epochs.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    filtered_raw_subject_basename = file(raw_subject_path).getBaseName().replace("_meg_preproc-raw_clean_raw", "").replace("_meg_preproc-raw", "")
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-
-    dataset_dir_parent_dir = file(dataset_dir).getParent()
-
-    events_file = events_files.find { event_file ->
-            event_file.contains(filtered_raw_subject_basename)
-        }
-
-    """
-    mkdir -p ${preproc_dir}/${params.epoch_output_dir}/${raw_subject_dir_basename}
-    python ${script_name} \\
-        --preproc_raw_file ${raw_subject_path} \\
-        --events_file ${events_file} \\
-        --output_epoch_file ${raw_subject_basename}-epo.fif \\
-        --output_dir ${preproc_dir}/${params.epoch_output_dir}/${raw_subject_dir_basename} \\
-        --config "${params.epoch_config}"
-    """
-}
-
-
-process coregistration {
-    tag "${raw_subject_dir_basename}"
-
-    time '1h'
-
-    input:
-    path preproc_dir
-    tuple val(mri_subject_id),path(fs_subjects_dir),val(raw_subject_path)
-
-    output:
-//     val "${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename}/coreg-trans.fif",emit: trans_files
-    path "${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename}/coreg-trans.fif",emit: trans_files
-    tuple val("${raw_subject_dir_basename}"),val("${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename}/coreg-trans.fif"),emit: meg_subject_id
-
-    script:
-    script_name = "${params.code_dir}/coregistration.py"
-    println "raw_subject_path: ${raw_subject_path}"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-    // Make sure the MRI has the same name as MEG
-    if (mri_subject_id == null) {
-        mri_subject_id = raw_subject_basename.split('_')[0]
-        }
-
-//     println("[coregistration]Extracted Subject ID: ${mri_subject_id}")
-    """
-    python ${script_name} \\
-        --raw_file ${raw_subject_path} \\
-        --subjects_dir ${fs_subjects_dir}/${mri_subject_id} \\
-        --visualize ${params.meg_visualize} \\
-        --output_dir ${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename} \\
-        --config "${params.core_config}"
-    """
-}
-
-
-// Estimate covariance from either epoched data or continuous raw baseline data.
-process compute_covariance {
-    tag "${raw_subject_dir_basename}"
-
-//     time '6h' // timeout
-
-    input:
-    path preproc_dir
-    tuple val(raw_subject_path),val(raw_data_file) // baseline raw data.
-
-    output:
-    path "${preproc_dir}/${params.covar_output_dir}/${raw_subject_dir_basename}/bl-cov.fif",emit: bl_cov_files
-    tuple val("${raw_subject_dir_basename}"),val("${preproc_dir}/${params.covar_output_dir}/${raw_subject_dir_basename}/bl-cov.fif"),emit: meg_subject_id
-
-
-    script:
-    script_name = "${params.code_dir}/compute_covariance.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-
-//     raw_path_str = raw_subject_path.toString()
-//     raw_data_file = (params.covar_type == "raw")
-//                         ? raw_path_str.replaceAll(/task-[^_]+/, "task-${params.raw_covariance_task_id}")
-//                         : raw_path_str
-    """
-    python ${script_name} \\
-        --raw_data_file ${raw_data_file} \\
-        --output_dir ${preproc_dir}/${params.covar_output_dir}/${raw_subject_dir_basename} \\
-        --visualize ${params.covar_visualize} \\
-        --covar_type ${params.covar_type} \\
-        --config "${params.covar_config}"
-    """
-}
-
-process forward_solution {
-    tag "${raw_subject_dir_basename}"
-
-    input:
-    path preproc_dir
-//     val raw_subject_path // trans reuslts of coregistration
-    path fs_subject_dir
-    tuple val(meg_subject_id),val(trans_path),val(epoch_path)
-
-    output:
-    path "${preproc_dir}/${params.fwd_output_dir}/${raw_subject_dir_basename}/*-fwd.fif",emit: fwd_files
-    path "${epoch_file}",emit: epoch_files
-    path "${raw_file}",emit: raw_files
-    tuple val("${raw_subject_dir_basename}"),val("${epoch_file}"),val("${raw_file}"),emit: meg_subject_id
-
-    script:
-    raw_subject_path = trans_path
-    script_name = "${params.code_dir}/forward_solution.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-
-//     println("raw_subject_path:${raw_subject_path},raw_subject_basename:${raw_subject_basename}")
-    mri_subject_id = raw_subject_dir_basename.split('_')[0]
-//     if (fs_subjects_dir == null) {
-//         fs_subject_dir = "${params.fs_subjects_dir}"
-//         }
-    mri_subject_dir = fs_subject_dir/mri_subject_id
-//     println("Extracted Subject ID: ${mri_subject_id}")
-
-
-//     trans_file = "${preproc_dir}/${params.trans_output_dir}/${raw_subject_dir_basename}/coreg-trans.fif"
-//     epoch_file = "${preproc_dir}/${params.epoch_output_dir}/${raw_subject_dir_basename}/${raw_subject_dir_basename}_preproc-raw_clean_raw-epo.fif"
-    trans_file = trans_path
-    epoch_file = epoch_path
-    raw_file = "${preproc_dir}/${raw_subject_dir_basename}/${raw_subject_dir_basename}_preproc-raw_clean_raw.fif"
-    """
-    mkdir -p ${preproc_dir}/${params.fwd_output_dir}/${raw_subject_dir_basename}
-    python ${script_name} \\
-        --epoch_file ${epoch_file} \\
-        --epoch_label ${params.fwd_epoch_label}  \\
-        --output_dir ${preproc_dir}/${params.fwd_output_dir}/${raw_subject_dir_basename} \\
-        --trans_file ${trans_file} \\
-        --mri_subject_dir ${mri_subject_dir} \\
-        --config "${params.fwd_config}"
-    """
-}
-
-
-process source_imaging {
-    tag "${raw_subject_dir_basename}"
-
-    input:
-    val src_type
-    path preproc_dir
-//     val raw_subject_path
-//     val bl_cov_file
-    tuple val(meg_subject_id),val(epoch_path),val(raw_path),val(bl_cov_file)
-
-    output:
-    path "${preproc_dir}/${params.src_output_dir}/${raw_subject_dir_basename}/*.stc",emit: source_files
-
-    script:
-    if (src_type == 'epochs') {
-        raw_subject_path = epoch_path
-    } else if (src_type == 'raw') {
-        raw_subject_path = raw_path
-    } else {
-        error "Invalid src_type: ${src_type}. Please specify 'epochs' or 'raw'."
-    }
-    script_name = "${params.code_dir}/source_localization.py"
-    raw_subject_basename = file(raw_subject_path).getBaseName()
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
-
-    """
-    mkdir -p ${preproc_dir}/${params.src_output_dir}/${raw_subject_dir_basename}
-    python ${script_name} \\
-        --data_mode ${params.src_type} \\
-        --data_file ${raw_subject_path}  \\
-        --fs_subjects_dir ${params.fs_subjects_dir} \\
-        --output_dir ${preproc_dir}/${params.src_output_dir}/${raw_subject_dir_basename} \\
-        --forward_dir ${preproc_dir}/${params.fwd_output_dir} \\
-        --visualize ${params.meg_visualize} \\
-        --noise_covariance_dir ${preproc_dir}/${params.covar_output_dir} \\
-        --config "${params.src_config}"
-    """
-
-}
-
-// Build the dataset-level portable static HTML report.
-process generate_static_html_report {
-    tag "static-html-report"
-
-    input:
-    val source_artifacts
-    path run_manifest
-    val preserve_existing_manifest
-
-    output:
-    path "static_html_report_done.txt", emit: completion_marker
-
-    script:
-    report_script = "${params.code_dir}/reports/static_html_report.py"
-    report_root = params.preproc_dir
-    report_output_dir = "${params.output_dir}/static_html_report"
-    zip_output = false
-    """
-    set -euo pipefail
-    manifest_dir="${params.preproc_dir}/logs"
-    manifest_dst="\${manifest_dir}/megprep_run_manifest.json"
-    manifest_backup=""
-    mkdir -p "\${manifest_dir}"
-
-    if [ "${preserve_existing_manifest}" = "true" ] && [ -f "\${manifest_dst}" ]; then
-        manifest_backup="\${manifest_dst}.before_report_only.\$\$"
-        cp "\${manifest_dst}" "\${manifest_backup}"
-    fi
-
-    restore_manifest() {
-        if [ "${preserve_existing_manifest}" = "true" ]; then
-            if [ -n "\${manifest_backup}" ] && [ -f "\${manifest_backup}" ]; then
-                mv "\${manifest_backup}" "\${manifest_dst}"
-            else
-                rm -f "\${manifest_dst}"
-            fi
-        fi
-    }
-    trap restore_manifest EXIT
-
-    # When the workflow wrote manifest directly under preprocessed/logs, Nextflow stages it in
-    # the work dir as a symlink to the same path as manifest_dst; cp then errors (same file).
-    if [ ! "${run_manifest}" -ef "\${manifest_dst}" ]; then
-        cp "${run_manifest}" "\${manifest_dst}"
-    fi
-
-    python "${report_script}" \\
-        --report_root "${report_root}" \\
-        --output_dir "${report_output_dir}" \\
-        --bad_channel_threshold ${params.bad_channel_threshold} \\
-        --bad_segment_threshold ${params.bad_segment_threshold} \\
-        --coreg_mean_threshold ${params.coreg_mean_threshold} \\
-        --coreg_max_threshold ${params.coreg_max_threshold} \\
-        --epoch_reject_rate_threshold ${params.epoch_reject_rate_threshold} \\
-        --task_log_mode "${params.static_task_log_mode}" \\
-        --zip_output ${zip_output}
-
-    echo "Static HTML report generated at ${report_output_dir}" > static_html_report_done.txt
-    """
-}
-
-process run_cohort_dataset {
-    tag "${dataset_name}"
-    maxForks params.cohort_max_parallel
-    debug true
-
-    input:
-    tuple val(original_dataset_name), val(dataset_name), val(dataset_dir), val(child_pipeline_file), val(child_config_file)
-
-    output:
-    path "cohort_dataset_${dataset_name}.done", emit: completion_marker
-
-    script:
-    dataset_output_dir = "${params.output_dir}/datasets/${dataset_name}"
-    dataset_preproc_dir = "${dataset_output_dir}/preprocessed"
-    dataset_work_dir = "${params.output_dir}/work/${dataset_name}"
-    dataset_fs_subjects_dir = "${params.fs_subjects_dir}/${dataset_name}"
-    dataset_child_log = "${dataset_output_dir}/cohort_child_nextflow.log"
-    report_script = "${params.code_dir}/reports/static_html_report.py"
-    error_mode = params.error_mode ?: 'lenient'
-    """
-    set -euo pipefail
-
-    sanitize_dataset_name() {
-        local raw_name="\$1"
-        raw_name="\${raw_name// /_}"
-        printf "%s" "\$raw_name" | tr -c "A-Za-z0-9_.-" "_"
-    }
-
-    steps_need_t1() {
-        local steps_value="\$1"
-        local primary="\${steps_value%%,*}"
-        case "\$primary" in
-            all|anatomy)
-                return 0
-                ;;
-        esac
-        case ",\${steps_value}," in
-            *,with_anatomy,*)
-                return 0
-                ;;
-        esac
-        return 1
-    }
-
-    resolve_t1_dir() {
-        local dataset_dir="\$1"
-        local original_dataset_name="\$2"
-        local t1_root="${params.cohort_t1_root ?: ''}"
-
-        if [ -z "\$t1_root" ]; then
-            printf "%s" "\$dataset_dir"
-            return
-        fi
-
-        if [ -d "\${t1_root}/\${original_dataset_name}" ]; then
-            printf "%s" "\${t1_root}/\${original_dataset_name}"
-            return
-        fi
-
-        printf "%s" "\$t1_root"
-    }
-
-    mkdir -p "${dataset_output_dir}" "${dataset_preproc_dir}" "${dataset_work_dir}" "${dataset_fs_subjects_dir}"
-
-    steps_value="${params.steps ?: 'meg_all'}"
-    dataset_t1_dir=""
-    if steps_need_t1 "\$steps_value"; then
-        dataset_t1_dir="\$(resolve_t1_dir "${dataset_dir}" "${original_dataset_name}")"
-    fi
-
-    echo "============================================================"
-    echo "Cohort dataset: ${original_dataset_name}"
-    echo "Sanitized name: ${dataset_name}"
-    echo "Input:          ${dataset_dir}"
-    echo "Output:         ${dataset_output_dir}"
-    echo "MRI:            ${dataset_fs_subjects_dir}"
-    if [ -n "\$dataset_t1_dir" ]; then
-        echo "T1:             \$dataset_t1_dir"
-    else
-        echo "T1:             <not used for steps=\$steps_value>"
-    fi
-    echo "============================================================"
-
-    nextflow_cmd=(
-        nextflow run "${child_pipeline_file}"
-        -c "${child_config_file}"
-        -w "${dataset_work_dir}"
-        --cohort false
-        --steps "\$steps_value"
-        --dataset_dir "${dataset_dir}"
-        --output_dir "${dataset_output_dir}"
-        --preproc_dir "${dataset_preproc_dir}"
-        --fs_subjects_dir "${dataset_fs_subjects_dir}"
-        --static_task_log_mode "${params.static_task_log_mode}"
-        --error_mode "${error_mode}"
-        -with-report "${dataset_output_dir}/report.html"
-        -with-timeline "${dataset_output_dir}/timeline.html"
-        -with-trace "${dataset_output_dir}/trace.txt"
-    )
-
-    if [ -n "\$dataset_t1_dir" ]; then
-        nextflow_cmd+=(--t1_dir "\$dataset_t1_dir" --t1_bids_dir "\$dataset_t1_dir")
-    fi
-
-    echo "Child Nextflow log: ${dataset_child_log}"
-    set +e
-    NXF_ANSI_LOG=false "\${nextflow_cmd[@]}" 2>&1 | sed -u 's/^/[${dataset_name}] /' | tee "${dataset_child_log}"
-    child_status=\${PIPESTATUS[0]}
-    set -e
-
-    cp "${child_config_file}" "${dataset_output_dir}/nextflow.config" || true
-
-    if [ -d "${dataset_preproc_dir}" ]; then
-        python "${report_script}" \\
-            --report_root "${dataset_output_dir}" \\
-            --output_dir "${dataset_output_dir}/static_html_report" \\
-            --bad_channel_threshold ${params.bad_channel_threshold} \\
-            --bad_segment_threshold ${params.bad_segment_threshold} \\
-            --coreg_mean_threshold ${params.coreg_mean_threshold} \\
-            --coreg_max_threshold ${params.coreg_max_threshold} \\
-            --epoch_reject_rate_threshold ${params.epoch_reject_rate_threshold} \\
-            --task_log_mode "${params.static_task_log_mode}" \\
-            --zip_output false || true
-    else
-        echo "Skipping static report regeneration; no preprocessed directory found at ${dataset_preproc_dir}"
-    fi
-
-    echo "dataset=${dataset_name}" > "cohort_dataset_${dataset_name}.done"
-    echo "status=\${child_status}" >> "cohort_dataset_${dataset_name}.done"
-
-    if [ "\${child_status}" -ne 0 ] && [ "${error_mode}" = "strict" ]; then
-        exit "\${child_status}"
-    fi
-    """
-}
-
 process generate_cohort_static_html_report {
     tag "cohort-static-html-report"
 
@@ -820,7 +42,158 @@ process generate_cohort_static_html_report {
     """
 }
 
-process import_MEG_dataset_native {
+process import_MRI_dataset {
+    tag "${dataset_name}"
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir)
+
+    output:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), path('imported_t1_data.txt'), emit: imported_t1_data
+
+    script:
+    script_name = "${params.code_dir}/mri_import_dataset.py"
+    """
+    mkdir -p "${preproc_dir}"
+    python ${script_name} \\
+        --bids_dir "${t1_dir}" \\
+        --config "${params.mri_import_config}" \\
+        --output_file imported_t1_data.txt
+    """
+}
+
+process dcm2niix {
+    tag "${dataset_name}:${t1_dicom_basename}"
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(t1_dicom_dir)
+
+    output:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), path("converted"), emit: nifti_dirs
+
+    script:
+    t1_dicom_basename = file(t1_dicom_dir).getName()
+    series_glob = (params.t1_dicom_series_glob ?: '').toString()
+    """
+    set -euo pipefail
+    mkdir -p converted
+
+    input_dir="${t1_dicom_dir}"
+    series_glob="${series_glob}"
+
+    echo "Starting DICOM to NIfTI conversion for directory: \${input_dir}"
+    if [ -n "\${series_glob}" ]; then
+        echo "Filtering DICOM series with relative glob: \${series_glob}"
+        mapfile -d '' series_dirs < <(find "\${input_dir}" -type d -path "\${input_dir}/\${series_glob}" -print0 | sort -z)
+    else
+        series_dirs=("\${input_dir}")
+    fi
+
+    if [ "\${#series_dirs[@]}" -eq 0 ]; then
+        echo "No DICOM series directories found under \${input_dir}" >&2
+        exit 1
+    fi
+
+    index=0
+    for series_dir in "\${series_dirs[@]}"; do
+        index=\$((index + 1))
+        safe_name=\$(basename "\${series_dir}" | tr -c 'A-Za-z0-9_.-' '_')
+        echo "Converting DICOM series: \${series_dir}"
+        dcm2niix -o converted -z y -f "${t1_dicom_basename}_\${index}_\${safe_name}_%p_%s" "\${series_dir}"
+    fi
+
+    nifti_count=\$(find converted -maxdepth 1 -type f \\( -name '*.nii' -o -name '*.nii.gz' \\) | wc -l | tr -d ' ')
+    if [ "\${nifti_count}" -eq 0 ]; then
+        echo "dcm2niix did not produce any NIfTI files for \${input_dir}" >&2
+        exit 1
+    fi
+
+    find converted -maxdepth 1 -type f \\( -name '*.nii' -o -name '*.nii.gz' \\) -print | sort
+    echo "Finished DICOM to NIfTI conversion."
+    """
+}
+
+process run_freesurfer {
+    tag "${dataset_name}:${subject_name}"
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(anat_file), val(subject_name)
+
+    output:
+    tuple val(dataset_name), val(output_dir), val(preproc_dir), val(subject_name), val(fs_subjects_dir), val("${fs_subjects_dir}/${subject_name}"), emit: fs_subjects
+
+    script:
+    """
+    mkdir -p "${fs_subjects_dir}"
+    recon-all -sd "${fs_subjects_dir}" -all -i "${anat_file}" -s "${subject_name}"
+    recon-all -sd "${fs_subjects_dir}" -all -s "${subject_name}" -3T -openmp 4
+    mkheadsurf -sd "${fs_subjects_dir}" -s "${subject_name}" -srcvol T1.mgz -thresh1 30
+    """
+}
+
+process run_deepprep {
+    tag "${dataset_name}:${subject_name}"
+
+    input:
+    tuple val(dataset_name), val(dataset_dir), val(output_dir), val(preproc_dir), val(fs_subjects_dir), val(t1_dir), val(subject_name)
+
+    output:
+    tuple val(dataset_name), val(output_dir), val(preproc_dir), val(subject_name), val(fs_subjects_dir), val("${fs_subjects_dir}/${subject_name}"), emit: fs_subjects
+
+    script:
+    output_dir = "${preproc_dir}/deepprep"
+    """
+    mkdir -p "${fs_subjects_dir}" "${output_dir}"
+    /opt/DeepPrep/deepprep/deepprep.sh "${t1_dir}" "${output_dir}" participant \\
+        --participant_label "${subject_name}" \\
+        --skip_bids_validation \\
+        --anat_only \\
+        --fs_license_file /fs_license.txt \\
+        --device ${params.deepprep_device} \\
+        --mri_import_config "${params.mri_import_config}" \\
+        --resume
+
+    kill -9 \$(pgrep redis-server) || true
+    cp -rf "${output_dir}/Recon/"* "${fs_subjects_dir}/"
+    """
+}
+
+process run_mkheadsurf {
+    tag "${dataset_name}:${subject_name}"
+
+    input:
+    tuple val(dataset_name), val(output_dir), val(preproc_dir), val(subject_name), val(fs_subjects_dir), val(subject_dir)
+
+    output:
+    tuple val(dataset_name), val(output_dir), val(preproc_dir), val(subject_name), val(fs_subjects_dir), val(subject_dir), emit: fs_subjects
+
+    script:
+    """
+    mkheadsurf -sd "${fs_subjects_dir}" -s "${subject_name}" -srcvol T1.mgz -thresh1 30
+    """
+}
+
+process generate_bem {
+    tag "${dataset_name}:${subject_name}"
+
+    input:
+    tuple val(dataset_name), val(output_dir), val(preproc_dir), val(subject_name), val(fs_subjects_dir), val(subject_dir)
+
+    output:
+    tuple val(dataset_name), val(output_dir), val(preproc_dir), val(subject_name), val(fs_subjects_dir), val(subject_dir), emit: bem_subjects
+
+    script:
+    script_name = "${params.code_dir}/generate_bem.py"
+    subject_basename = file(subject_dir).getBaseName()
+    """
+    python3 ${script_name} \\
+        --subject_dir "${subject_dir}" \\
+        --config "${params.bem_config}" \\
+        --output_dir "${fs_subjects_dir}/${subject_basename}/bem"
+    """
+}
+
+process import_MEG_dataset {
     tag "${dataset_name}"
 
     input:
@@ -844,7 +217,7 @@ process import_MEG_dataset_native {
     """
 }
 
-process meg_preproc_osl_native {
+process meg_preproc_osl {
     tag "${dataset_name}:${raw_subject_basename}"
     memory { 6.GB * task.attempt }
 
@@ -866,7 +239,7 @@ process meg_preproc_osl_native {
     """
 }
 
-process detect_Artifacts_native {
+process detect_Artifacts {
     tag "${dataset_name}:${raw_subject_basename}"
 
     input:
@@ -888,7 +261,7 @@ process detect_Artifacts_native {
     """
 }
 
-process run_ICA_native {
+process run_ICA {
     tag "${dataset_name}:${raw_subject_basename}"
     memory { 8.GB * task.attempt }
 
@@ -915,7 +288,7 @@ process run_ICA_native {
     """
 }
 
-process run_IC_label_native {
+process run_IC_label {
     tag "${dataset_name}:${raw_subject_basename}"
 
     input:
@@ -937,7 +310,7 @@ process run_IC_label_native {
     """
 }
 
-process apply_ICA_native {
+process apply_ICA {
     tag "${dataset_name}:${raw_subject_basename}"
 
     input:
@@ -963,7 +336,7 @@ process apply_ICA_native {
     """
 }
 
-process epochs_native {
+process epochs {
     tag "${subject_key[0]}:${subject_key[1]}"
 
     input:
@@ -989,7 +362,7 @@ process epochs_native {
     """
 }
 
-process compute_covariance_native {
+process compute_covariance {
     tag "${subject_key[0]}:${subject_key[1]}"
 
     input:
@@ -1011,7 +384,7 @@ process compute_covariance_native {
     """
 }
 
-process coregistration_native {
+process coregistration {
     tag "${subject_key[0]}:${subject_key[1]}"
     time '1h'
 
@@ -1036,7 +409,7 @@ process coregistration_native {
     """
 }
 
-process forward_solution_native {
+process forward_solution {
     tag "${key[0]}:${key[1]}"
 
     input:
@@ -1063,7 +436,7 @@ process forward_solution_native {
     """
 }
 
-process source_imaging_native {
+process source_imaging {
     tag "${key[0]}:${key[1]}"
 
     input:
@@ -1094,7 +467,7 @@ process source_imaging_native {
     """
 }
 
-process generate_static_html_report_native {
+process generate_static_html_report {
     tag "${dataset_name}"
 
     input:
@@ -1243,30 +616,37 @@ workflow {
 
     log.info "Pipeline steps: primary=${cfg.primary}, megStage=${cfg.megStage}, runAnatomy=${cfg.runAnatomy}, runMeg=${cfg.runMeg}, skipIca=${cfg.skipIca}"
 
-    if ((params.cohort ?: false).toString().toBoolean()) {
-        def sanitizeDatasetName = { String rawName ->
-            rawName.replace(' ', '_').replaceAll(/[^A-Za-z0-9_.-]/, '_')
-        }
-        def cohortEngine = (params.cohort_engine ?: 'native').toString().toLowerCase()
-        if (cohortEngine == 'native') {
-            if (cfg.runAnatomy) {
-                error "Native cohort currently supports MEG workflows with pre-existing anatomy only. Use --cohort_engine nested for steps=${params.steps}."
-            }
+    def cohortMode = (params.cohort ?: false).toString().toBoolean()
+    def sanitizeDatasetName = { String rawName ->
+        rawName.replace(' ', '_').replaceAll(/[^A-Za-z0-9_.-]/, '_')
+    }
+    if (cohortMode) {
+        log.info "Cohort mode enabled: dataset root=${params.dataset_dir}"
+    } else {
+        log.info "Single-dataset mode enabled: dataset=${params.dataset_dir}"
+    }
 
-            log.info "Native cohort mode enabled: dataset root=${params.dataset_dir}, engine=${cohortEngine}"
-
-            native_dataset_ch = Channel
-                .fromPath("${params.dataset_dir}/*", type: 'dir', checkIfExists: true)
-                .map { datasetPath ->
-                    def originalName = datasetPath.getName()
-                    def datasetName = sanitizeDatasetName(originalName)
-                    def outputDir = "${params.output_dir}/datasets/${datasetName}"
-                    def preprocDir = "${outputDir}/preprocessed"
-                    def fsSubjectsDir = "${params.fs_subjects_dir}/${datasetName}"
-                    def t1Root = params.cohort_t1_root?.toString()
-                    def t1Dir = t1Root ? (new File(t1Root, originalName).isDirectory() ? new File(t1Root, originalName).toString() : t1Root) : datasetPath.toString()
-                    tuple(datasetName, datasetPath.toString(), outputDir, preprocDir, fsSubjectsDir, t1Dir)
-                }
+            native_dataset_ch = cohortMode
+                ? Channel
+                    .fromPath("${params.dataset_dir}/*", type: 'dir', checkIfExists: true)
+                    .map { datasetPath ->
+                        def originalName = datasetPath.getName()
+                        def datasetName = sanitizeDatasetName(originalName)
+                        def outputDir = "${params.output_dir}/datasets/${datasetName}"
+                        def preprocDir = "${outputDir}/preprocessed"
+                        def fsSubjectsDir = "${params.fs_subjects_dir}/${datasetName}"
+                        def t1Root = params.cohort_t1_root?.toString()
+                        def t1Dir = t1Root ? (new File(t1Root, originalName).isDirectory() ? new File(t1Root, originalName).toString() : t1Root) : datasetPath.toString()
+                        tuple(datasetName, datasetPath.toString(), outputDir, preprocDir, fsSubjectsDir, t1Dir)
+                    }
+                : Channel.value(tuple(
+                    sanitizeDatasetName(new File(params.dataset_dir.toString()).getName() ?: 'dataset'),
+                    params.dataset_dir.toString(),
+                    params.output_dir.toString(),
+                    params.preproc_dir.toString(),
+                    params.fs_subjects_dir.toString(),
+                    (params.t1_dir ?: params.t1_bids_dir ?: params.dataset_dir).toString()
+                ))
 
             def native_report_input_ch
 
@@ -1276,7 +656,97 @@ workflow {
                         tuple(dataset_name, output_dir, preproc_dir, true)
                     }
             } else {
-                native_imported = import_MEG_dataset_native(native_dataset_ch, params.dataset_format, params.file_suffix)
+                def native_anatomy_subject_ch = null
+                if (cfg.runAnatomy) {
+                    def native_t1_inputs_ch
+                    if (params.is_bids) {
+                        native_t1_imported = import_MRI_dataset(native_dataset_ch)
+                        native_t1_inputs_ch = native_t1_imported.imported_t1_data
+                            .flatMap { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, imported_file ->
+                                imported_file.readLines()
+                                    .collect { it.trim() }
+                                    .findAll { it }
+                                    .collectMany { line ->
+                                        def matcher = line =~ /([^:]+):\[(.+?)\]/
+                                        if (!matcher) {
+                                            return []
+                                        }
+                                        def subjectName = matcher[0][1].trim()
+                                        matcher[0][2]
+                                            .split(',')
+                                            .collect { it.trim().replaceAll(/'/, '') }
+                                            .findAll { it }
+                                            .collect { anat_file ->
+                                                tuple(dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, anat_file, subjectName)
+                                            }
+                                    }
+                            }
+
+                        if (params.anatomy_preprocess_method == 'freesurfer') {
+                            native_fs = run_freesurfer(native_t1_inputs_ch)
+                            native_bem = generate_bem(native_fs.fs_subjects)
+                            native_anatomy_subject_ch = native_bem.bem_subjects
+                        } else if (params.anatomy_preprocess_method == 'deepprep') {
+                            native_t1_subjects_ch = native_t1_inputs_ch
+                                .map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, anat_file, subject_name ->
+                                    tuple(dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, subject_name)
+                                }
+                                .unique { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, subject_name ->
+                                    "${dataset_name}:${subject_name}"
+                                }
+                            native_deep = run_deepprep(native_t1_subjects_ch)
+                            native_head = run_mkheadsurf(native_deep.fs_subjects)
+                            native_bem = generate_bem(native_head.fs_subjects)
+                            native_anatomy_subject_ch = native_bem.bem_subjects
+                        } else {
+                            error "Unsupported anatomy preprocessing method: ${params.anatomy_preprocess_method}. Supported methods are 'freesurfer' and 'deepprep'."
+                        }
+                    } else {
+                        if (params.t1_input_type == 'dicom') {
+                            native_t1_dicom_ch = native_dataset_ch.flatMap { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir ->
+                                def t1Root = new File(t1_dir.toString())
+                                def dirs = t1Root.listFiles()?.findAll { it.isDirectory() } ?: []
+                                def dicomRoots = dirs ?: (t1Root.exists() ? [t1Root] : [])
+                                dicomRoots.collect { dicom_dir ->
+                                    tuple(dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, dicom_dir.toString())
+                                }
+                            }
+                            native_t1_inputs_ch = dcm2niix(native_t1_dicom_ch).nifti_dirs
+                                .flatMap { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, converted_dir ->
+                                    def files = new File(converted_dir.toString()).listFiles()?.findAll {
+                                        it.isFile() && (it.name.endsWith('.nii') || it.name.endsWith('.nii.gz'))
+                                    }?.sort { it.name } ?: []
+                                    files.collect { anat_file ->
+                                        def subjectName = anat_file.getName().replaceAll(/\.nii(\.gz)?$/, '')
+                                        tuple(dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, anat_file.toString(), subjectName)
+                                    }
+                                }
+                        } else if (params.t1_input_type == 'nifti') {
+                            native_t1_inputs_ch = native_dataset_ch.flatMap { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir ->
+                                def files = new File(t1_dir.toString()).listFiles()?.findAll { it.isFile() && (it.name.endsWith('.nii') || it.name.endsWith('.nii.gz')) } ?: []
+                                files.collect { anat_file ->
+                                    def subjectName = anat_file.getName().replaceAll(/\.nii(\.gz)?$/, '')
+                                    tuple(dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, anat_file.toString(), subjectName)
+                                }
+                            }
+                        } else {
+                            error "Unsupported t1_input_type: ${params.t1_input_type}. Supported types are 'dicom' and 'nifti'."
+                        }
+
+                        native_fs = run_freesurfer(native_t1_inputs_ch)
+                        native_bem = generate_bem(native_fs.fs_subjects)
+                        native_anatomy_subject_ch = native_bem.bem_subjects
+                    }
+                }
+
+                def report_source_ch = null
+
+                if (!cfg.runMeg) {
+                    report_source_ch = native_anatomy_subject_ch.map { dataset_name, output_dir, preproc_dir, subject_name, fs_subjects_dir, subject_dir ->
+                        tuple([dataset_name, output_dir, preproc_dir], subject_dir)
+                    }
+                } else {
+                native_imported = import_MEG_dataset(native_dataset_ch, params.dataset_format, params.file_suffix)
 
                 native_raw_subject_ch = native_imported.imported_meg_data
                     .flatMap { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, imported_file ->
@@ -1288,10 +758,10 @@ workflow {
                             }
                     }
 
-                native_preproc = meg_preproc_osl_native(native_raw_subject_ch)
-                native_artifacts = detect_Artifacts_native(native_preproc.preproc_subjects)
+                native_preproc = meg_preproc_osl(native_raw_subject_ch)
+                native_artifacts = detect_Artifacts(native_preproc.preproc_subjects)
 
-                def report_source_ch = native_artifacts.artifacts.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, preproc_raw_path, bad_channels, bad_segments ->
+                report_source_ch = native_artifacts.artifacts.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, preproc_raw_path, bad_channels, bad_segments ->
                     tuple([dataset_name, output_dir, preproc_dir], bad_channels)
                 }
 
@@ -1299,9 +769,9 @@ workflow {
                 def native_epoch_subject_ch = null
 
                 if (cfg.megStage >= 1 && !cfg.skipIca) {
-                    native_ica = run_ICA_native(native_artifacts.artifacts)
-                    native_labels = run_IC_label_native(native_ica.ica_subjects)
-                    native_clean = apply_ICA_native(native_labels.labelled_subjects)
+                    native_ica = run_ICA(native_artifacts.artifacts)
+                    native_labels = run_IC_label(native_ica.ica_subjects)
+                    native_clean = apply_ICA(native_labels.labelled_subjects)
                     native_clean_subject_ch = native_clean.clean_subjects
                     report_source_ch = native_clean_subject_ch.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
                         tuple([dataset_name, output_dir, preproc_dir], clean_raw_path)
@@ -1323,7 +793,7 @@ workflow {
                                 tuple(subjectKey, dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id)
                             }
                     }
-                    native_epochs = epochs_native(epoch_input_ch)
+                    native_epochs = epochs(epoch_input_ch)
                     native_epoch_subject_ch = native_epochs.epoch_subjects
                     report_source_ch = native_epoch_subject_ch.map { key, output_dir, preproc_dir, fs_subjects_dir, epoch_path, analysis_raw_path ->
                         tuple([key[0], output_dir, preproc_dir], epoch_path)
@@ -1357,19 +827,35 @@ workflow {
                         error "Unsupported covar_type: ${params.covar_type}."
                     }
 
-                    native_cov = compute_covariance_native(covariance_inputs_ch)
-                    native_coreg_inputs = native_clean_subject_ch.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
-                        def subjectKey = [dataset_name, new File(clean_raw_path.toString()).getParentFile().getName()]
-                        tuple(subjectKey, dataset_name, output_dir, preproc_dir, fs_subjects_dir, target_mri_subject_id, clean_raw_path)
+                    native_cov = compute_covariance(covariance_inputs_ch)
+                    if (cfg.runAnatomy) {
+                        native_coreg_subject_ch = native_clean_subject_ch.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
+                            def subjectKey = [dataset_name, new File(clean_raw_path.toString()).getParentFile().getName()]
+                            tuple([dataset_name, target_mri_subject_id], subjectKey, dataset_name, output_dir, preproc_dir, target_mri_subject_id, clean_raw_path)
+                        }
+                        native_anatomy_by_subject_ch = native_anatomy_subject_ch.map { dataset_name, output_dir, preproc_dir, subject_name, fs_subjects_dir, subject_dir ->
+                            tuple([dataset_name, subject_name], fs_subjects_dir)
+                        }
+                        native_coreg_inputs = native_coreg_subject_ch
+                            .combine(native_anatomy_by_subject_ch, by: 0)
+                            .map { mri_key, subjectKey, dataset_name, output_dir, preproc_dir, target_mri_subject_id, clean_raw_path, fs_subjects_dir ->
+                                tuple(subjectKey, dataset_name, output_dir, preproc_dir, fs_subjects_dir, target_mri_subject_id, clean_raw_path)
+                            }
+                    } else {
+                        native_coreg_inputs = native_clean_subject_ch.map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir, orig_raw_path, clean_raw_path, target_mri_subject_id ->
+                            def subjectKey = [dataset_name, new File(clean_raw_path.toString()).getParentFile().getName()]
+                            tuple(subjectKey, dataset_name, output_dir, preproc_dir, fs_subjects_dir, target_mri_subject_id, clean_raw_path)
+                        }
                     }
-                    native_trans = coregistration_native(native_coreg_inputs)
+                    native_trans = coregistration(native_coreg_inputs)
                     native_fwd_inputs = native_trans.trans_subjects.combine(native_epoch_subject_ch, by: 0)
-                    native_fwds = forward_solution_native(native_fwd_inputs)
+                    native_fwds = forward_solution(native_fwd_inputs)
                     native_source_inputs = native_fwds.fwd_subjects.combine(native_cov.cov_subjects, by: 0)
-                    native_source = source_imaging_native(native_source_inputs)
+                    native_source = source_imaging(native_source_inputs)
                     report_source_ch = native_source.source_subjects.map { key, output_dir, preproc_dir, source_file ->
                         tuple([key[0], output_dir, preproc_dir], source_file)
                     }
+                }
                 }
 
                 native_report_input_ch = report_source_ch
@@ -1379,439 +865,8 @@ workflow {
                     }
             }
 
-            native_reports = generate_static_html_report_native(native_report_input_ch)
-            generate_cohort_static_html_report(native_reports.dataset_reports.map { dataset_name, output_dir, preproc_dir, marker -> marker }.collect())
-        } else if (cohortEngine == 'nested') {
-        def childPipelineFile = params.cohort_child_pipeline_file?.toString()
-        if (!childPipelineFile) {
-            try {
-                childPipelineFile = workflow.scriptFile?.toString()
-            } catch (Exception ignored) {
-                childPipelineFile = ''
+            native_reports = generate_static_html_report(native_report_input_ch)
+            if (cohortMode) {
+                generate_cohort_static_html_report(native_reports.dataset_reports.map { dataset_name, output_dir, preproc_dir, marker -> marker }.collect())
             }
-        }
-        if (!childPipelineFile) {
-            childPipelineFile = new File(workflow.projectDir.toString(), 'nextflow/meg_anat_pipeline_for_docker.nf').absolutePath
-        }
-
-        def childConfigFile = params.cohort_child_config?.toString()
-        if (!childConfigFile) {
-            try {
-                def configFiles = workflow.configFiles
-                if (configFiles) {
-                    def items = (configFiles instanceof Collection) ? configFiles : (configFiles.getClass().isArray() ? configFiles.toList() : [configFiles])
-                    childConfigFile = items[-1].toString()
-                }
-            } catch (Exception ignored) {
-                childConfigFile = ''
-            }
-        }
-        if (!childConfigFile) {
-            childConfigFile = new File(workflow.projectDir.toString(), 'nextflow.config').absolutePath
-        }
-
-        log.info "Cohort mode enabled: dataset root=${params.dataset_dir}, max parallel datasets=${params.cohort_max_parallel ?: 2}"
-        log.info "Cohort child pipeline: ${childPipelineFile}"
-        log.info "Cohort child config: ${childConfigFile}"
-
-        Channel
-            .fromPath("${params.dataset_dir}/*", type: 'dir', checkIfExists: true)
-            .map { datasetPath ->
-                def originalName = datasetPath.getName()
-                tuple(originalName, sanitizeDatasetName(originalName), datasetPath.toString(), childPipelineFile, childConfigFile)
-            }
-            .set { cohort_dataset_ch }
-
-        cohort_dataset_results = run_cohort_dataset(cohort_dataset_ch)
-        generate_cohort_static_html_report(cohort_dataset_results.completion_marker.collect())
-        } else {
-            error "Unsupported cohort_engine: ${params.cohort_engine}. Use native or nested."
-        }
-    } else {
-
-    def snapshot = [
-            dataset_dir: params.dataset_dir?.toString(),
-            output_dir: params.output_dir?.toString(),
-            preproc_dir: params.preproc_dir?.toString(),
-            code_dir: params.code_dir?.toString(),
-            fs_subjects_dir: params.fs_subjects_dir?.toString(),
-            anatomy_preprocess_method: params.anatomy_preprocess_method?.toString(),
-            dataset_format: params.dataset_format?.toString(),
-            covar_type: params.covar_type?.toString(),
-            src_type: params.src_type?.toString(),
-            is_bids: params.is_bids
-    ]
-    def partialManifest = [
-        manifest_schema_version: 2,
-        steps_raw: (params.steps ?: 'meg_all').toString(),
-        parsed: [
-            primary: cfg.primary,
-            meg_stage: cfg.megStage,
-            run_anatomy: cfg.runAnatomy,
-            run_meg: cfg.runMeg,
-            skip_ica: cfg.skipIca
-        ],
-        params_snapshot: snapshot
-    ]
-    if (cfg.primary == 'report') {
-        partialManifest.report_only = true
-        def mf = new File("${params.preproc_dir}/logs/megprep_run_manifest.json")
-        if (mf.exists()) {
-            try {
-                def prev = new JsonSlurper().parse(mf) as Map
-                def p = prev?.parsed as Map
-                if (p && p.primary?.toString() != 'report' && p.run_meg == true) {
-                    partialManifest.parsed = p
-                    partialManifest.params_snapshot = (prev.params_snapshot instanceof Map) ? prev.params_snapshot : snapshot
-                    partialManifest.pipeline_steps_raw = (prev.pipeline_steps_raw ?: prev.steps_raw)?.toString()
-                }
-            } catch (Exception e) {
-                log.warn "Could not merge prior megprep_run_manifest.json: ${e.message}"
-            }
-        }
-    }
-    partialManifest['workflow_meta'] = [
-        session_id: workflow.sessionId?.toString() ?: '',
-        run_name: workflow.runName?.toString() ?: '',
-        start: workflow.start?.toString() ?: '',
-        nextflow_version: workflow.nextflow?.version?.toString() ?: '',
-        launch_dir: workflow.launchDir?.toString() ?: '',
-        project_dir: workflow.projectDir?.toString() ?: ''
-    ]
-    def manifestJson = JsonOutput.prettyPrint(JsonOutput.toJson(partialManifest))
-    // Write manifest synchronously in the workflow driver (no extra process) so the console
-    // task list matches older runs and local executor noise stays lower.
-    def run_manifest_ch
-    if (cfg.primary == 'report') {
-        def scratchDir = new File("${params.output_dir}")
-        scratchDir.mkdirs()
-        def scratchManifest = new File(scratchDir, 'megprep_run_manifest.report_only.json')
-        scratchManifest.setText(manifestJson, 'UTF-8')
-        run_manifest_ch = Channel.value(file(scratchManifest.absolutePath))
-    } else {
-        def logsDirForManifest = new File("${params.preproc_dir}/logs")
-        logsDirForManifest.mkdirs()
-        def publishedManifest = new File(logsDirForManifest, 'megprep_run_manifest.json')
-        publishedManifest.setText(manifestJson, 'UTF-8')
-        run_manifest_ch = Channel.value(file(publishedManifest.absolutePath))
-    }
-
-    // Snapshot the effective Nextflow config into preprocessed/logs (best-effort).
-    // Prefer workflow.configFiles so custom `-c /path/to/config` and Docker's
-    // /program/nextflow/run_nextflow.config are captured before the static report is built.
-    // Custom config files are stored as run_nextflow.config to avoid confusing them with
-    // the project default nextflow.config.
-    try {
-        def logDir = new File("${params.preproc_dir}/logs")
-        if (!logDir.exists() && !logDir.mkdirs()) {
-            log.warn "Could not create preprocessed/logs for nextflow.config snapshot: ${logDir.absolutePath}"
-        } else {
-            def launchDir = new File(workflow.launchDir.toString())
-            def projectDir = new File(workflow.projectDir.toString())
-            def copiedName = null
-            def copiedSourceName = null
-
-            def copyConfig = { File src, String targetName ->
-                if (!src || !src.exists() || !src.isFile()) {
-                    return false
-                }
-                def dst = new File(logDir, targetName)
-                if (src.canonicalPath != dst.canonicalPath) {
-                    dst.bytes = src.bytes
-                }
-                copiedName = targetName
-                copiedSourceName = src.name
-                log.debug "nextflow.config snapshot: ${src.absolutePath} -> ${dst.absolutePath}"
-                return true
-            }
-
-            def chooseEffectiveConfig = { List<File> files ->
-                def existing = files.findAll { it && it.exists() && it.isFile() }
-                if (!existing) {
-                    return null
-                }
-                def dockerRunConfig = existing.find { it.name == 'run_nextflow.config' }
-                if (dockerRunConfig) {
-                    return dockerRunConfig
-                }
-                def customConfigs = existing.findAll { it.name != 'nextflow.config' }
-                if (customConfigs) {
-                    return customConfigs[-1]
-                }
-                return existing[-1]
-            }
-
-            def effectiveConfig = null
-            try {
-                def configFiles = workflow.configFiles
-                if (configFiles) {
-                    def configFileItems = (configFiles instanceof Collection) ? configFiles : (configFiles.getClass().isArray() ? configFiles.toList() : [configFiles])
-                    effectiveConfig = chooseEffectiveConfig(configFileItems.collect { new File(it.toString()) })
-                }
-            } catch (Exception ignored) {
-                log.debug "workflow.configFiles is not available in this Nextflow version"
-            }
-
-            if (!effectiveConfig) {
-                effectiveConfig = chooseEffectiveConfig([
-                    new File(launchDir, 'run_nextflow.config'),
-                    new File(projectDir, 'run_nextflow.config'),
-                    new File(launchDir, 'nextflow.config'),
-                    new File(projectDir, 'nextflow.config'),
-                ])
-            }
-
-            if (effectiveConfig) {
-                def targetName = (effectiveConfig.name == 'nextflow.config') ? 'nextflow.config' : 'run_nextflow.config'
-                copyConfig(effectiveConfig, targetName)
-                if (targetName == 'run_nextflow.config') {
-                    def staleDefault = new File(logDir, 'nextflow.config')
-                    if (staleDefault.exists() && staleDefault.isFile()) {
-                        staleDefault.delete()
-                    }
-                } else {
-                    def staleRunConfig = new File(logDir, 'run_nextflow.config')
-                    if (staleRunConfig.exists() && staleRunConfig.isFile()) {
-                        staleRunConfig.delete()
-                    }
-                }
-            }
-
-            if (!copiedName) {
-                log.warn(
-                    "nextflow.config snapshot: no effective nextflow.config or run_nextflow.config found under " +
-                    "workflow.configFiles, launchDir=${launchDir.absolutePath}, or projectDir=${projectDir.absolutePath}. " +
-                    "Static report will fall back to other paths if available."
-                )
-            } else {
-                def sourceSuffix = (copiedSourceName && copiedSourceName != copiedName) ? " from ${copiedSourceName}" : ""
-                log.info "nextflow.config snapshot: saved ${copiedName}${sourceSuffix} under ${logDir.absolutePath}"
-            }
-        }
-    } catch (Exception e) {
-        log.warn "nextflow.config snapshot skipped: ${e.message}"
-    }
-
-    if (cfg.primary == 'report') {
-        generate_static_html_report(Channel.value(true), run_manifest_ch, true)
-    } else {
-
-    if (cfg.runAnatomy) {
-        // Anatomy preprocessing workflow.
-        if (params.is_bids) {
-            println("params.is_bids:${params.is_bids}")
-
-            t1_files = import_MRI_dataset(params.t1_dir)
-
-            t1_files.imported_t1_data
-                .splitText()
-                .map { it.trim() }
-                .filter { it }
-                .map { line ->
-                    def matcher = line =~ /sub-(\d+):\[(.+?)\]/
-                    if (matcher) {
-                        def paths = matcher[0][2].split(',').collect { it.trim().replaceAll(/'/, '') }
-                        return paths
-                    } else {
-                        return []
-                    }
-                }
-                .flatten()
-                .set { t1_files_path }
-
-                t1_nifti_files = t1_files_path.filter { it.endsWith(".nii.gz") }
-
-                t1_files = t1_nifti_files
-
-                subject_names = t1_nifti_files.map { filePath ->
-                        def matcher = filePath =~ /sub-\d+/
-                        matcher ? matcher[0] : ''
-                    }
-                    subject_names = subject_names.unique()
-
-                subject_names.view { "Subject Names: ${it}" }
-
-
-            if (params.anatomy_preprocess_method == 'freesurfer') {
-
-                    fs_recon = run_freesurfer(t1_files, subject_names, params.fs_subjects_dir)
-
-                    fs_anatomy_output = generate_bem(fs_recon.fs_subject_dir,fs_recon.mri_subject_id, params.bem_config, params.fs_subjects_dir)
-
-            } else if (params.anatomy_preprocess_method == 'deepprep') {
-
-                    fs_recon = run_deepprep(params.t1_bids_dir, subject_names, params.fs_subjects_dir, params.preproc_dir)
-
-                    subject_names = Channel.fromPath("${params.fs_subjects_dir}/*", type: 'dir')
-                                        .filter { !it.name.startsWith("fsaverage") }
-                                        .map { it.getBaseName() }
-                    subject_names.view { name -> println "MRI Subject name: ${name}" }
-
-                    fs_recon_mk = run_mkheadsurf(fs_recon.mri_subject_id,params.fs_subjects_dir)
-                    fs_anatomy_output = generate_bem(fs_recon_mk.fs_subject_dir,fs_recon_mk.mri_subject_id,params.bem_config, params.fs_subjects_dir)
-            } else {
-                error "Unsupported anatomy preprocessing method: ${params.anatomy_preprocess_method}. Supported methods are 'freesurfer' and 'deepprep'."
-            }
-        } else {
-            if (params.t1_input_type == 'dicom') {
-                println "params.t1_dir: ${params.t1_dir}"
-                t1_dicom_dirs = Channel.fromPath("${params.t1_dir}/*/", type: 'dir')
-                log.info "DICOM to NifTI..."
-                dcm2niix(t1_dicom_dirs)
-                t1_files = dcm2niix.out
-            } else if (params.t1_input_type == 'nifti') {
-                t1_nifti_files = Channel.fromPath("${params.t1_dir}/*.{nii,nii.gz}")
-                t1_nifti_files.view { "T1 NIfTI Files: $it" }
-                t1_files = t1_nifti_files
-            } else {
-                error "Unsupported t1_input_type: ${params.t1_input_type}. Supported types are 'dicom' and 'nifti'."
-            }
-
-            subject_names = t1_files.map { it.name.replace(".nii.gz", "") }
-            fs_recon = run_freesurfer(t1_files, subject_names, params.fs_subjects_dir)
-
-            fs_anatomy_output = generate_bem(fs_recon.fs_subject_dir, fs_recon.mri_subject_id, params.bem_config, params.fs_subjects_dir)
-
-        }
-
-    } else {
-        fs_subjects_dir = file(params.fs_subjects_dir)
-        fs_anatomy_output = new AnatOutput(null,fs_subjects_dir)
-    }
-
-    if ( cfg.runMeg ) {
-       raw_files = import_MEG_dataset(params.dataset_dir,params.dataset_format,params.file_suffix)
-
-       raw_files.imported_meg_data
-               .splitText()
-               .map { it.trim() }
-               .filter { it }
-               .set {raw_files_path}
-
-       preproc_subject_paths = meg_preproc_osl(params.dataset_dir,raw_files_path,params.preproc_dir,params.preproc_config)
-
-      preproc_subject_paths_dta = detect_Artifacts(params.preproc_dir,preproc_subject_paths)
-
-       if (cfg.megStage >= 1 && !cfg.skipIca) {
-       preproc_subject_paths_ica = run_ICA(params.preproc_dir,
-                                        preproc_subject_paths_dta.preproc_subject_paths,
-                                        preproc_subject_paths_dta.bad_channels,
-                                        preproc_subject_paths_dta.bad_segments)
-
-       preproc_subject_paths_ica_label = run_IC_label(params.preproc_dir,
-                                            preproc_subject_paths_ica.preproc_subject_paths,
-                                            preproc_subject_paths_ica.ica_fif_paths,
-                                            preproc_subject_paths_ica.ica_sources)
-
-       preproc_subject_paths_clean = apply_ICA(params.preproc_dir,
-                                            preproc_subject_paths_ica_label.preproc_subject_paths,
-                                            preproc_subject_paths_ica_label.marked_components,
-                                            preproc_subject_paths_dta.bad_channels,
-                                            preproc_subject_paths_dta.bad_segments)
-       }
-
-        events_files = raw_files_path.collect { raw_subject_path ->
-            return raw_subject_path.replaceAll(/_meg\..*/, '_events.tsv')
-        }
-
-        if (cfg.megStage >= 2) {
-        if (cfg.skipIca) {
-            if (params.covar_type == 'raw'){
-                preproc_subject_paths
-                    .filter { orig_path_obj ->
-                        def orig_path = orig_path_obj.toString()
-                        !orig_path.contains("task-${params.raw_covariance_task_id}")
-                    }
-                    .set { preproc_subject_raw }
-            } else {
-                preproc_subject_raw = preproc_subject_paths
-            }
-        } else {
-        if (params.covar_type == 'raw'){
-            preproc_subject_paths_clean.preproc_subject_paths
-                    .filter { orig_path_obj ->
-                        def orig_path = orig_path_obj.toString()
-                        !orig_path.contains("task-${params.raw_covariance_task_id}")
-                    }
-                    .set { preproc_subject_raw }
-        } else {
-            preproc_subject_raw = preproc_subject_paths_clean.preproc_subject_paths
-        }
-        }
-
-        epoch_subject_paths = epochs(params.dataset_dir, params.preproc_dir,preproc_subject_raw,events_files)
-        }
-
-        if (cfg.megStage >= 3) {
-
-        if (params.covar_type == 'epochs'){
-            preproc_subject_paths_clean.preproc_subject_paths
-                .map { raw_subject_path ->
-                    tuple(raw_subject_path, raw_subject_path)
-                }
-                .set { covariance_inputs_ch }
-        } else if (params.covar_type == 'raw'){
-            preproc_subject_paths_clean.preproc_subject_paths
-                .map { orig_path_obj ->
-                    def orig_path = orig_path_obj.toString()
-
-                    if (orig_path.contains("task-${params.raw_covariance_task_id}"))
-                        return null
-
-                    def raw_data_file = orig_path.replaceAll(/task-[^_]+/, "task-${params.raw_covariance_task_id}")
-                    tuple(orig_path_obj, raw_data_file)
-                }
-                .filter { it != null }
-                .filter { orig_path_obj, raw_data_file ->
-                    new File(raw_data_file).exists()
-                }
-                .set { covariance_inputs_ch }
-        } else {
-            error "Unsupported covar_type: ${params.covar_type}."
-        }
-
-        cov_files = compute_covariance(params.preproc_dir, covariance_inputs_ch)
-
-        target_subject_id = preproc_subject_paths_clean.target_mri_subject_id
-        if (fs_anatomy_output?.mri_subject_id) {
-            println "fs_anatomy_output.mri_subject_id is set."
-
-            core_inputs = fs_anatomy_output.mri_subject_id.combine(target_subject_id, by: 0)
-        } else {
-            println "fs_anatomy_output.mri_subject_id is not set."
-            preproc_subject_raw
-                .map { raw_subject_path ->
-                    def raw_subject_basename = file(raw_subject_path).getBaseName()
-                    tuple(raw_subject_basename.split('_')[0], fs_anatomy_output.fs_subjects_dir, raw_subject_path)
-                }
-                .set { core_inputs }
-        }
-
-        core_inputs.view {"coregistration: ${it} "}
-
-        trans_subject_paths = coregistration(params.preproc_dir,core_inputs)
-
-        epoch_subject_id = epoch_subject_paths.meg_subject_id
-        fwd_inputs = trans_subject_paths.meg_subject_id.combine(epoch_subject_id, by: 0)
-
-        fwds = forward_solution(params.preproc_dir,
-                        params.fs_subjects_dir,
-                        fwd_inputs)
-
-        cov_subject_id = cov_files.meg_subject_id
-        source_inputs = fwds.meg_subject_id.combine(cov_subject_id, by: 0)
-
-        source_results = source_imaging(params.src_type, params.preproc_dir, source_inputs)
-
-        generate_static_html_report(source_results.source_files.collect(), run_manifest_ch, false)
-        } else if (cfg.megStage == 2) {
-            generate_static_html_report(epoch_subject_paths.meg_subject_id.collect(), run_manifest_ch, false)
-        } else if (cfg.megStage == 1) {
-            generate_static_html_report(preproc_subject_paths_clean.preproc_subject_paths.collect(), run_manifest_ch, false)
-        } else if (cfg.megStage == 0) {
-            generate_static_html_report(preproc_subject_paths_dta.bad_channels.collect(), run_manifest_ch, false)
-        }
-    }
-    }
-    }
 }

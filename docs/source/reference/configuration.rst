@@ -59,6 +59,10 @@ overrides before launching Nextflow.
    * - ``--t1_input_type``
      - ``params.t1_input_type``
      - ``nifti`` or ``dicom`` for non-BIDS anatomy input.
+   * - ``--t1_dicom_series_glob``
+     - ``params.t1_dicom_series_glob``
+     - Optional relative glob for selecting DICOM series directories under each
+       T1 DICOM root, for example ``*T1*`` or ``*mprage*``.
    * - ``--resume``
      - Nextflow ``-resume``
      - Reuses completed Nextflow work directory tasks where possible.
@@ -144,17 +148,6 @@ Global Paths and Execution Settings
      - ``false``
      - Treat ``dataset_dir`` as a collection root and let Nextflow expand each
        immediate child directory into an independent dataset run.
-   * - ``cohort_engine``
-     - string
-     - ``native``
-     - Cohort execution engine. ``native`` runs one Nextflow DAG over dataset
-       tuple channels and exposes per-step tasks in the terminal. ``nested``
-       preserves the older child-Nextflow-per-dataset implementation and is a
-       fallback for workflows not yet covered by the native engine.
-   * - ``cohort_max_parallel``
-     - integer
-     - ``2``
-     - Maximum number of datasets to execute concurrently in cohort mode.
    * - ``cohort_t1_root``
      - path
      - unset
@@ -273,6 +266,11 @@ MEGPrep assumes ``fs_subjects_dir`` already contains subject reconstructions.
      - string
      - ``nifti`` or ``dicom``
      - Non-BIDS T1 input format.
+   * - ``t1_dicom_series_glob``
+     - string
+     - unset
+     - Optional relative glob for selecting DICOM series directories before
+       conversion. When unset, the whole DICOM root is passed to ``dcm2niix``.
    * - ``fs_subjects_dir``
      - path
      - FreeSurfer subjects directory

@@ -15,12 +15,11 @@ FS_LICENSE_FILE=""
 FS_SUBJECTS_DIR=""
 T1_DIR=""
 T1_INPUT_TYPE=""
+T1_DICOM_SERIES_GLOB=""
 ANAT_ONLY=false
 MEG_ONLY=false
 VIEW_REPORT=false
 COHORT_MODE=false
-COHORT_MAX_PARALLEL="${COHORT_MAX_PARALLEL:-2}"
-COHORT_ENGINE="${COHORT_ENGINE:-native}"
 NEXTFLOW_FILE="/program/nextflow/meg_pipeline.nf"
 STREAMLIT_APP_PATH="/program/megprep/reports/reports.py"
 COHORT_REPORT_PATH="/program/megprep/reports/cohort_static_html_report.py"
@@ -43,6 +42,7 @@ while [[ "$#" -gt 0 ]]; do
         # Other parameters
         --t1_dir) T1_DIR="$2"; shift ;;
         --t1_input_type) T1_INPUT_TYPE="$2"; shift ;;
+        --t1_dicom_series_glob|--t1-dicom-series-glob) T1_DICOM_SERIES_GLOB="$2"; shift ;;
 
         # options for specifying only one part
         --anat_only) ANAT_ONLY=true ;;
@@ -53,8 +53,6 @@ while [[ "$#" -gt 0 ]]; do
 
         # cohort mode
         --cohort) COHORT_MODE=true ;;
-        --cohort_engine|--cohort-engine) COHORT_ENGINE="$2"; shift ;;
-        --cohort_max_parallel|--cohort-max-parallel) COHORT_MAX_PARALLEL="$2"; shift ;;
 
         # static report options
         --static_task_log_mode|--task-log-mode) STATIC_TASK_LOG_MODE="$2"; shift ;;
@@ -71,13 +69,12 @@ while [[ "$#" -gt 0 ]]; do
             echo "  -s, --steps           Same as Nextflow --steps / params.steps (e.g. all, meg_all, anatomy, report, meg_epochs,skip_ica)"
             echo "  -r, --view-report     Run Streamlit to view the report (does not run Nextflow)"
             echo "  --cohort              Treat --input as a directory of datasets; isolate each child's output and FreeSurfer SUBJECTS_DIR"
-            echo "  --cohort_engine       Cohort execution engine: native or nested (default: native)"
-            echo "  --cohort_max_parallel Number of datasets to run concurrently in cohort mode (default: 2)"
             echo "  --static_task_log_mode failed|all-command-log|none"
             echo "  --fs_license_file     Specify the FreeSurfer license file"
             echo "  --fs_subjects_dir     Specify the FreeSurfer SUBJECTS_DIR directory containing processed T1 results"
             echo "  --t1_dir              Specify the T1 image directory"
             echo "  --t1_input_type       Specify the T1 input type"
+            echo "  --t1_dicom_series_glob Optional relative glob for selecting DICOM series under each T1 DICOM root"
             echo "  --anat_only           Deprecated shortcut for --steps anatomy"
             echo "  --meg_only            Deprecated shortcut for --steps meg_all"
             echo "  --resume              Resume the previous run(nextflow options)"
@@ -136,17 +133,8 @@ case "$STATIC_TASK_LOG_MODE" in
         ;;
 esac
 
-case "$COHORT_ENGINE" in
-    native|nested) ;;
-    *)
-        echo "Error: invalid --cohort_engine '$COHORT_ENGINE' (expected native or nested)"
-        exit 1
-        ;;
-esac
-
 echo "Using configuration file: $CONFIG_FILE"
 echo "Static report task log mode: $STATIC_TASK_LOG_MODE"
-echo "Cohort engine: $COHORT_ENGINE"
 
 write_run_config() {
     local run_input_dir="$1"
@@ -187,6 +175,15 @@ write_run_config() {
     if [ -n "$T1_INPUT_TYPE" ]; then
         echo "Setting t1_input_type in config to: $T1_INPUT_TYPE"
         sed -i "s|^\s*t1_input_type\s*=.*|    t1_input_type = \"$T1_INPUT_TYPE\"|" "$run_config_file"
+    fi
+
+    if [ -n "$T1_DICOM_SERIES_GLOB" ]; then
+        echo "Setting t1_dicom_series_glob in config to: $T1_DICOM_SERIES_GLOB"
+        if grep -q "^[[:space:]]*t1_dicom_series_glob[[:space:]]*=" "$run_config_file"; then
+            sed -i "s|^[[:space:]]*t1_dicom_series_glob[[:space:]]*=.*|    t1_dicom_series_glob = \"$T1_DICOM_SERIES_GLOB\"|" "$run_config_file"
+        else
+            sed -i "/^[[:space:]]*t1_input_type[[:space:]]*=/a\\    t1_dicom_series_glob = \"$T1_DICOM_SERIES_GLOB\"" "$run_config_file"
+        fi
     fi
 
     echo "Setting static_task_log_mode in config to: $STATIC_TASK_LOG_MODE"
@@ -243,56 +240,6 @@ run_nextflow_pipeline() {
     cp "$run_config_file" "${run_output_dir}/nextflow.config"
 }
 
-sanitize_dataset_name() {
-    local raw_name="$1"
-    raw_name="${raw_name// /_}"
-    printf "%s" "$raw_name" | tr -c "A-Za-z0-9_.-" "_"
-}
-
-resolve_cohort_t1_dir() {
-    local dataset_dir="$1"
-    local dataset_name="$2"
-
-    if [ -z "$T1_DIR" ]; then
-        printf "%s" "$dataset_dir"
-        return
-    fi
-
-    if [ -d "${T1_DIR}/${dataset_name}" ]; then
-        printf "%s" "${T1_DIR}/${dataset_name}"
-        return
-    fi
-
-    printf "%s" "$T1_DIR"
-}
-
-steps_need_t1() {
-    local steps_value="$1"
-    local primary="${steps_value%%,*}"
-
-    case "$primary" in
-        all|anatomy)
-            return 0
-            ;;
-    esac
-
-    case ",${steps_value}," in
-        *,with_anatomy,*)
-            return 0
-            ;;
-    esac
-
-    return 1
-}
-
-effective_steps_value() {
-    if [ -n "$STEPS" ]; then
-        printf "%s" "$STEPS"
-        return
-    fi
-    sed -n 's/^[[:space:]]*steps[[:space:]]*=[[:space:]]*["'\'']\([^"'\'']*\)["'\''].*/\1/p' "$CONFIG_FILE" | head -n 1
-}
-
 regenerate_static_report() {
     local run_output_dir="$1"
     if [ -d "${run_output_dir}/preprocessed" ]; then
@@ -329,10 +276,6 @@ if [ "$COHORT_MODE" = true ]; then
 
     cohort_args=(
         --cohort true
-        --cohort_engine "$COHORT_ENGINE"
-        --cohort_max_parallel "$COHORT_MAX_PARALLEL"
-        --cohort_child_pipeline_file "$NEXTFLOW_FILE"
-        --cohort_child_config "$RUN_CONFIG_FILE"
         --cohort_t1_root "$T1_DIR"
         --dataset_dir "$INPUT_DIR"
         --output_dir "$OUTPUT_DIR"
@@ -344,8 +287,6 @@ if [ "$COHORT_MODE" = true ]; then
         cohort_args+=(--steps "$STEPS")
     fi
 
-    echo "Cohort parallel datasets: $COHORT_MAX_PARALLEL"
-    echo "Cohort engine: $COHORT_ENGINE"
     nextflow run "${NEXTFLOW_FILE}" \
         -c "${RUN_CONFIG_FILE}" \
         "${cohort_args[@]}" \
