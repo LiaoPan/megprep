@@ -159,7 +159,7 @@ def main():
     # Load MEG file
     raw = mne.io.read_raw(args.raw_data_path, preload=True)
 
-    raw_basename = Path(raw.filenames[0]).parent.stem
+    raw_basename = Path(raw.filenames[0]).parent.name
 
     artifact_ic_output_file = os.path.join(args.output_dir, raw_basename, "marked_components.txt")
 

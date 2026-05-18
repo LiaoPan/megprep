@@ -316,7 +316,7 @@ def process_subject(epoch_file, fs_subjects_dir, noise_cov_path, fwd_dir, output
         spacing = config.get('spacing')
 
         # Load noise covariance
-        meg_subject_id = Path(epoch_file).parent.stem
+        meg_subject_id = Path(epoch_file).parent.name
         noise_cov_file = os.path.join(noise_cov_path, meg_subject_id, 'bl-cov.fif')
         noise_cov = mne.read_cov(noise_cov_file)
 
@@ -357,7 +357,7 @@ def process_raw(raw_file, fs_subjects_dir, noise_cov_path, fwd_dir, output_dir, 
     epoch_label = config.get("epoch_label", "")
 
     try:
-        meg_subject_id = Path(raw_file).parent.stem
+        meg_subject_id = Path(raw_file).parent.name
         noise_cov_file = os.path.join(noise_cov_path, meg_subject_id, 'bl-cov.fif')
         noise_cov = mne.read_cov(noise_cov_file)
 

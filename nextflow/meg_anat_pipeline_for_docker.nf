@@ -251,7 +251,7 @@ process detect_Artifacts {
     script:
     script_name = "${params.code_dir}/meg_detect_artifacts.py"
     raw_subject_basename = file(preproc_raw_path).getBaseName()
-    raw_subject_parent = file(preproc_raw_path).getParent().getBaseName()
+    raw_subject_parent = file(preproc_raw_path).getParent().getName()
     """
     mkdir -p "${preproc_dir}/artifact_report/${raw_subject_parent}"
     python ${script_name} \\
@@ -274,7 +274,7 @@ process run_ICA {
     script:
     script_name = "${params.code_dir}/run_ica.py"
     raw_subject_basename = file(preproc_raw_path).getBaseName()
-    raw_subject_dir_basename = file(preproc_raw_path).getParent().getBaseName()
+    raw_subject_dir_basename = file(preproc_raw_path).getParent().getName()
     compute_explained_variance = params.ica_compute_explained_variance ?: false
     """
     python ${script_name} \\
@@ -300,7 +300,7 @@ process run_IC_label {
     script:
     script_name = "${params.code_dir}/run_ica_label.py"
     raw_subject_basename = file(preproc_raw_path).getBaseName()
-    raw_subject_dir_basename = file(preproc_raw_path).getParent().getBaseName()
+    raw_subject_dir_basename = file(preproc_raw_path).getParent().getName()
     """
     python ${script_name} \\
         --raw_data_path "${preproc_raw_path}" \\
@@ -322,7 +322,7 @@ process apply_ICA {
     script:
     script_name = "${params.code_dir}/apply_ica.py"
     raw_subject_basename = file(preproc_raw_path).getBaseName()
-    raw_subject_dir_basename = file(preproc_raw_path).getParent().getBaseName()
+    raw_subject_dir_basename = file(preproc_raw_path).getParent().getName()
     target_mri_subject_id = raw_subject_basename.split('_')[0] + params.anatomy_select_tag
     """
     python ${script_name} \\
@@ -348,7 +348,7 @@ process epochs {
     script:
     script_name = "${params.code_dir}/epochs.py"
     raw_subject_basename = file(analysis_raw_path).getBaseName()
-    raw_subject_dir_basename = file(analysis_raw_path).getParent().getBaseName()
+    raw_subject_dir_basename = file(analysis_raw_path).getParent().getName()
     filtered_raw_subject_basename = file(orig_raw_path).getBaseName().replace("_meg_preproc-raw_clean_raw", "").replace("_meg_preproc-raw", "")
     events_file = orig_raw_path.toString().replaceAll(/_meg\..*/, '_events.tsv')
     """
@@ -373,7 +373,7 @@ process compute_covariance {
 
     script:
     script_name = "${params.code_dir}/compute_covariance.py"
-    raw_subject_dir_basename = file(raw_subject_path).getParent().getBaseName()
+    raw_subject_dir_basename = file(raw_subject_path).getParent().getName()
     """
     python ${script_name} \\
         --raw_data_file "${raw_data_file}" \\
@@ -397,7 +397,7 @@ process coregistration {
     script:
     script_name = "${params.code_dir}/coregistration.py"
     raw_subject_basename = file(clean_raw_path).getBaseName()
-    raw_subject_dir_basename = file(clean_raw_path).getParent().getBaseName()
+    raw_subject_dir_basename = file(clean_raw_path).getParent().getName()
     mri_subject_id = target_mri_subject_id ?: raw_subject_basename.split('_')[0]
     """
     python ${script_name} \\

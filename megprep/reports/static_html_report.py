@@ -2287,10 +2287,41 @@ def filter_retried_trace_failures(tasks_by_subject: dict[str, list[dict[str, Any
     return tasks_by_subject
 
 
-def match_task_subject(tag: str | None, subjects: list[str]) -> str | None:
+def trace_tag_dataset_and_subject(tag: str | None) -> tuple[str | None, str | None]:
+    if not tag:
+        return None, None
+    if ":" not in tag:
+        return None, tag
+    dataset_name, subject_tag = tag.split(":", 1)
+    return dataset_name.strip() or None, subject_tag.strip() or None
+
+
+def manifest_dataset_name(manifest: dict[str, Any] | None) -> str | None:
+    params_snapshot = manifest.get("params_snapshot") if isinstance(manifest, dict) else None
+    if not isinstance(params_snapshot, dict):
+        return None
+    dataset_name = params_snapshot.get("dataset_name")
+    if dataset_name in (None, ""):
+        return None
+    return str(dataset_name)
+
+
+def trace_tag_matches_dataset(tag: str | None, dataset_name: str | None) -> bool:
+    if not dataset_name:
+        return True
+    tag_dataset, _ = trace_tag_dataset_and_subject(tag)
+    if not tag_dataset:
+        return True
+    return sanitize_name(tag_dataset) == sanitize_name(dataset_name)
+
+
+def match_task_subject(tag: str | None, subjects: list[str], dataset_name: str | None = None) -> str | None:
     if not tag:
         return None
-    tag_norm = sanitize_name(tag)
+    if not trace_tag_matches_dataset(tag, dataset_name):
+        return None
+    _, subject_tag = trace_tag_dataset_and_subject(tag)
+    tag_norm = sanitize_name(subject_tag or tag)
     for subject in subjects:
         subject_norm = sanitize_name(subject)
         if tag_norm == subject_norm or tag_norm.startswith(subject_norm) or subject_norm in tag_norm:
@@ -2421,13 +2452,14 @@ def collect_nextflow_task_details(
     tasks_by_subject: dict[str, list[dict[str, Any]]] = {subject: [] for subject in subjects}
     trace_files = find_trace_files(report_root, preprocessed_dir, manifest)
     work_roots = infer_work_roots(report_root, preprocessed_dir, manifest)
+    dataset_name = manifest_dataset_name(manifest)
 
     for trace_file in trace_files:
         with open(trace_file, "r", encoding="utf-8", errors="replace", newline="") as f:
             reader = csv.DictReader(f, delimiter="\t")
             for row in reader:
                 process_name, tag = parse_trace_task_name(row.get("name", ""))
-                subject = match_task_subject(tag, subjects)
+                subject = match_task_subject(tag, subjects, dataset_name=dataset_name)
                 if subject is None:
                     continue
                 subject_slug = sanitize_name(subject)

@@ -330,7 +330,7 @@ def main(args):
     # Parse YAML configuration
     config = yaml.safe_load(args.config)
 
-    base_name = os.path.basename(args.input).split('.')[0]
+    base_name = Path(args.input).stem
     output_bad_segments_file = f"{args.output}/{base_name}_bad_segments.txt"
     output_bad_channels_file = f"{args.output}/{base_name}_bad_channels.txt"
     check_imgs_output_dir = Path(output_bad_channels_file).parent / "check_imgs"

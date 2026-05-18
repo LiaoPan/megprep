@@ -269,7 +269,7 @@ def main():
     args = parse_arguments()
 
     subj_tag = f"{Path(args.raw_file).stem}"
-    subj_res_path = os.path.join(args.output_dir, f"{Path(args.raw_file).parent.stem}")
+    subj_res_path = os.path.join(args.output_dir, f"{Path(args.raw_file).parent.name}")
     subj_res_path_ica = os.path.join(subj_res_path, "ica_results")
     os.makedirs(subj_res_path_ica, exist_ok=True)
 
