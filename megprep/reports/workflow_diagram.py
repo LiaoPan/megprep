@@ -93,6 +93,32 @@ def _extract_params_steps(config_text: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+def _parsed_value(parsed: dict[str, Any], snake_key: str, default: Any = None) -> Any:
+    aliases = {
+        "meg_stage": "megStage",
+        "run_anatomy": "runAnatomy",
+        "run_meg": "runMeg",
+        "skip_ica": "skipIca",
+    }
+    if snake_key in parsed:
+        return parsed.get(snake_key)
+    camel_key = aliases.get(snake_key)
+    if camel_key and camel_key in parsed:
+        return parsed.get(camel_key)
+    return default
+
+
+def _parsed_bool(parsed: dict[str, Any], snake_key: str, default: bool = False) -> bool:
+    return bool(_parsed_value(parsed, snake_key, default))
+
+
+def _parsed_int(parsed: dict[str, Any], snake_key: str, default: int) -> int:
+    try:
+        return int(_parsed_value(parsed, snake_key, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_meg_steps_python(steps_raw: str) -> dict[str, Any]:
     """Mirror nextflow parseMegPipelineSteps (subset sufficient for workflow UI)."""
     parts = [p.strip().lower() for p in steps_raw.split(",") if p.strip()]
@@ -163,19 +189,13 @@ def qc_completeness_scope_from_manifest(manifest: dict[str, Any] | None) -> dict
     parsed = manifest.get("parsed")
     if not isinstance(parsed, dict):
         return default
-    if not bool(parsed.get("run_meg")):
-        try:
-            ms = int(parsed.get("meg_stage", -99))
-        except (TypeError, ValueError):
-            ms = -99
-        return {"meg_stage": ms, "skip_ica": bool(parsed.get("skip_ica")), "run_meg": False}
-    try:
-        ms = int(parsed.get("meg_stage", 3))
-    except (TypeError, ValueError):
-        ms = 3
+    if not _parsed_bool(parsed, "run_meg"):
+        ms = _parsed_int(parsed, "meg_stage", -99)
+        return {"meg_stage": ms, "skip_ica": _parsed_bool(parsed, "skip_ica"), "run_meg": False}
+    ms = _parsed_int(parsed, "meg_stage", 3)
     return {
         "meg_stage": ms,
-        "skip_ica": bool(parsed.get("skip_ica")),
+        "skip_ica": _parsed_bool(parsed, "skip_ica"),
         "run_meg": True,
     }
 
@@ -233,7 +253,7 @@ def build_workflow_nodes(manifest: dict[str, Any] | None, source: str) -> tuple[
         )
         return nodes, f"steps: {steps_raw} (source: {source})"
 
-    if bool(parsed.get("run_anatomy")):
+    if _parsed_bool(parsed, "run_anatomy"):
         nodes.append(
             {
                 "key": "anatomy_structural",
@@ -243,9 +263,9 @@ def build_workflow_nodes(manifest: dict[str, Any] | None, source: str) -> tuple[
             }
         )
 
-    meg_stage = int(parsed.get("meg_stage", -99))
-    run_meg = bool(parsed.get("run_meg"))
-    skip_ica = bool(parsed.get("skip_ica"))
+    meg_stage = _parsed_int(parsed, "meg_stage", -99)
+    run_meg = _parsed_bool(parsed, "run_meg")
+    skip_ica = _parsed_bool(parsed, "skip_ica")
 
     if run_meg:
         # First node: OSL-based preprocessing (no "import", no "OSL" in label).
@@ -427,12 +447,9 @@ def _node_label_lines(label: str, max_chars: int = 18, max_lines: int = 2) -> li
 
 def _meg_stage_for_param_filter(parsed: dict[str, Any] | None) -> int:
     """meg_stage from manifest; used to hide unused param rows."""
-    if not isinstance(parsed, dict) or not bool(parsed.get("run_meg")):
+    if not isinstance(parsed, dict) or not _parsed_bool(parsed, "run_meg"):
         return -1
-    try:
-        return int(parsed.get("meg_stage", 3))
-    except (TypeError, ValueError):
-        return 3
+    return _parsed_int(parsed, "meg_stage", 3)
 
 
 def _params_keys_for_manifest(parsed_dict: dict[str, Any] | None) -> list[str]:
@@ -448,7 +465,7 @@ def _show_anatomy_snapshot_fields(parsed: dict[str, Any] | None) -> bool:
         return False
     if str(parsed.get("primary", "")) == "anatomy":
         return True
-    return bool(parsed.get("run_anatomy"))
+    return _parsed_bool(parsed, "run_anatomy")
 
 
 def _snapshot_rows(snap: dict[str, Any], keys: tuple[str, ...] | list[str]) -> list[tuple[str, str]]:
@@ -479,9 +496,9 @@ def _workflow_detail_groups(manifest: dict[str, Any]) -> list[tuple[str, list[tu
     if parsed_dict:
         if parsed_dict.get("primary") not in (None, ""):
             mode_rows.append(("primary", _run_mode_label(parsed_dict["primary"])))
-        if parsed_dict.get("skip_ica"):
+        if _parsed_bool(parsed_dict, "skip_ica"):
             mode_rows.append(("skip_ica", "yes"))
-        if parsed_dict.get("run_anatomy"):
+        if _parsed_bool(parsed_dict, "run_anatomy"):
             mode_rows.append(("run_anatomy", "yes"))
     if mode_rows:
         groups.append(("Run mode", mode_rows))

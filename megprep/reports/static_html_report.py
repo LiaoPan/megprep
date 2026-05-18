@@ -2269,6 +2269,24 @@ def trace_task_failed(row: dict[str, str]) -> bool:
     return bool(status and status not in SUCCESS_TRACE_STATUSES)
 
 
+def filter_retried_trace_failures(tasks_by_subject: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """Hide failed attempts when the same process/tag later completed after retry."""
+    for subject, tasks in tasks_by_subject.items():
+        successful_identities = {
+            (task.get("process") or "", task.get("tag") or "")
+            for task in tasks
+            if not task.get("failed")
+        }
+        if not successful_identities:
+            continue
+        tasks_by_subject[subject] = [
+            task
+            for task in tasks
+            if not (task.get("failed") and (task.get("process") or "", task.get("tag") or "") in successful_identities)
+        ]
+    return tasks_by_subject
+
+
 def match_task_subject(tag: str | None, subjects: list[str]) -> str | None:
     if not tag:
         return None
@@ -2280,12 +2298,34 @@ def match_task_subject(tag: str | None, subjects: list[str]) -> str | None:
     return None
 
 
-def find_trace_files(report_root: Path, preprocessed_dir: Path) -> list[Path]:
+def find_trace_files(report_root: Path, preprocessed_dir: Path, manifest: dict[str, Any] | None = None) -> list[Path]:
     candidates: list[Path] = []
+    launch_candidates: list[Path] = []
     for base in [report_root, report_root.parent, preprocessed_dir / "logs"]:
         if base.exists():
             candidates.extend(base.glob("trace*.txt"))
             candidates.extend(base.glob("trace*.tsv"))
+    params_snapshot = manifest.get("params_snapshot") if isinstance(manifest, dict) else None
+    if isinstance(params_snapshot, dict) and params_snapshot.get("output_dir"):
+        output_dir = Path(str(params_snapshot["output_dir"]))
+        for base in [
+            output_dir,
+            output_dir.parent,
+            output_dir.parent.parent,
+        ]:
+            if base.exists():
+                candidates.extend(base.glob("trace*.txt"))
+                candidates.extend(base.glob("trace*.tsv"))
+                candidates.extend(base.glob("*trace*.txt"))
+                candidates.extend(base.glob("*trace*.tsv"))
+    workflow_meta = manifest.get("workflow_meta") if isinstance(manifest, dict) else None
+    if isinstance(workflow_meta, dict) and workflow_meta.get("launch_dir"):
+        launch_dir = Path(str(workflow_meta["launch_dir"]))
+        if launch_dir.exists():
+            launch_candidates.extend(launch_dir.glob("trace*.txt"))
+            launch_candidates.extend(launch_dir.glob("trace*.tsv"))
+    if not candidates:
+        candidates.extend(launch_candidates)
     seen: set[Path] = set()
     trace_files: list[Path] = []
     for path in sorted(candidates):
@@ -2307,7 +2347,12 @@ def infer_work_roots(report_root: Path, preprocessed_dir: Path, manifest: dict[s
     if isinstance(params_snapshot, dict) and params_snapshot.get("output_dir"):
         output_dir = Path(str(params_snapshot["output_dir"]))
         roots.append(output_dir / "work")
+        roots.append(output_dir.parent.parent / "work")
+        roots.append(output_dir.parent.parent / "work" / "cohort_driver")
         roots.append(output_dir.parent.parent / "work" / output_dir.name)
+    workflow_meta = manifest.get("workflow_meta") if isinstance(manifest, dict) else None
+    if isinstance(workflow_meta, dict) and workflow_meta.get("launch_dir"):
+        roots.append(Path(str(workflow_meta["launch_dir"])) / "work")
     seen: set[Path] = set()
     result: list[Path] = []
     for root in roots:
@@ -2374,7 +2419,7 @@ def collect_nextflow_task_details(
     task_log_mode: str = "failed",
 ) -> dict[str, list[dict[str, Any]]]:
     tasks_by_subject: dict[str, list[dict[str, Any]]] = {subject: [] for subject in subjects}
-    trace_files = find_trace_files(report_root, preprocessed_dir)
+    trace_files = find_trace_files(report_root, preprocessed_dir, manifest)
     work_roots = infer_work_roots(report_root, preprocessed_dir, manifest)
 
     for trace_file in trace_files:
@@ -2435,7 +2480,7 @@ def collect_nextflow_task_details(
                     }
                 )
 
-    return tasks_by_subject
+    return filter_retried_trace_failures(tasks_by_subject)
 
 
 def resolve_report_dirs(report_root: Path) -> tuple[Path, Path]:
