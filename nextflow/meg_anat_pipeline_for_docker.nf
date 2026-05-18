@@ -648,21 +648,17 @@ workflow {
                     (params.t1_dir ?: params.t1_bids_dir ?: params.dataset_dir).toString()
                 ))
 
-            native_dataset_report_seed_ch = native_dataset_ch
+            native_dataset_report_row_ch = native_dataset_ch
                 .map { dataset_name, dataset_dir, output_dir, preproc_dir, fs_subjects_dir, t1_dir ->
                     tuple(dataset_name, output_dir, preproc_dir)
                 }
-                .collect()
-                .ifEmpty([])
 
             def native_report_input_ch
 
             if (cfg.primary == 'report') {
-                native_report_input_ch = native_dataset_report_seed_ch
-                    .flatMap { dataset_rows ->
-                        dataset_rows.collect { row ->
-                            tuple(row[0], row[1], row[2], true)
-                        }
+                native_report_input_ch = native_dataset_report_row_ch
+                    .map { dataset_name, output_dir, preproc_dir ->
+                        tuple(dataset_name, output_dir, preproc_dir, true)
                     }
             } else {
                 def native_anatomy_subject_ch = null
@@ -748,10 +744,10 @@ workflow {
                     }
                 }
 
-                def report_wait_ch = null
+                def report_wait_token_ch = null
 
                 if (!cfg.runMeg) {
-                    report_wait_ch = native_anatomy_subject_ch.collect().ifEmpty([])
+                    report_wait_token_ch = native_anatomy_subject_ch.collect(flat: false).ifEmpty([]).map { true }
                 } else {
                 native_imported = import_MEG_dataset(native_dataset_ch, params.dataset_format, params.file_suffix)
 
@@ -768,7 +764,7 @@ workflow {
                 native_preproc = meg_preproc_osl(native_raw_subject_ch)
                 native_artifacts = detect_Artifacts(native_preproc.preproc_subjects)
 
-                report_wait_ch = native_artifacts.artifacts.collect().ifEmpty([])
+                report_wait_token_ch = native_artifacts.artifacts.collect(flat: false).ifEmpty([]).map { true }
 
                 def native_clean_subject_ch = null
                 def native_epoch_subject_ch = null
@@ -778,7 +774,7 @@ workflow {
                     native_labels = run_IC_label(native_ica.ica_subjects)
                     native_clean = apply_ICA(native_labels.labelled_subjects)
                     native_clean_subject_ch = native_clean.clean_subjects
-                    report_wait_ch = native_clean_subject_ch.collect().ifEmpty([])
+                    report_wait_token_ch = native_clean_subject_ch.collect(flat: false).ifEmpty([]).map { true }
                 }
 
                 if (cfg.megStage >= 2) {
@@ -798,7 +794,7 @@ workflow {
                     }
                     native_epochs = epochs(epoch_input_ch)
                     native_epoch_subject_ch = native_epochs.epoch_subjects
-                    report_wait_ch = native_epoch_subject_ch.collect().ifEmpty([])
+                    report_wait_token_ch = native_epoch_subject_ch.collect(flat: false).ifEmpty([]).map { true }
                 }
 
                 if (cfg.megStage >= 3) {
@@ -853,16 +849,14 @@ workflow {
                     native_fwds = forward_solution(native_fwd_inputs)
                     native_source_inputs = native_fwds.fwd_subjects.combine(native_cov.cov_subjects, by: 0)
                     native_source = source_imaging(native_source_inputs)
-                    report_wait_ch = native_source.source_subjects.collect().ifEmpty([])
+                    report_wait_token_ch = native_source.source_subjects.collect(flat: false).ifEmpty([]).map { true }
                 }
                 }
 
-                native_report_input_ch = native_dataset_report_seed_ch
-                    .combine(report_wait_ch)
-                    .flatMap { dataset_rows, stage_outputs ->
-                        dataset_rows.collect { row ->
-                            tuple(row[0], row[1], row[2], stage_outputs)
-                        }
+                native_report_input_ch = native_dataset_report_row_ch
+                    .combine(report_wait_token_ch)
+                    .map { dataset_name, output_dir, preproc_dir, wait_token ->
+                        tuple(dataset_name, output_dir, preproc_dir, wait_token)
                     }
             }
 
