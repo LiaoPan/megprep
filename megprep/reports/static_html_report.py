@@ -52,6 +52,14 @@ STEP_DEFS = [
     ("source", "Source"),
 ]
 PROCESS_TO_STEP = {
+    "import_MRI_dataset": "anatomy import",
+    "dcm2niix": "anatomy import",
+    "run_freesurfer": "anatomy",
+    "run_deepprep": "anatomy",
+    "run_mkheadsurf": "headmodel",
+    "generate_bem": "headmodel",
+    "import_MEG_dataset": "meg import",
+    "meg_preproc_osl": "basic preproc",
     "detect_Artifacts": "artifacts",
     "run_ICA": "ica",
     "run_IC_label": "ica",
@@ -62,6 +70,8 @@ PROCESS_TO_STEP = {
     "compute_covariance": "covariance",
     "compute_covariances": "covariance",
     "source_imaging": "source",
+    "generate_static_html_report": "report",
+    "generate_cohort_static_html_report": "report",
 }
 SUCCESS_TRACE_STATUSES = {"COMPLETED", "CACHED", "SUBMITTED", "RUNNING"}
 
