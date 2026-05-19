@@ -1000,6 +1000,30 @@ tr.row-fail:hover td.active-sort-cell {
   gap: 16px;
 }
 
+.artifact-gallery {
+  display: grid;
+  gap: 18px;
+}
+
+.artifact-group {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  background: linear-gradient(180deg, #fbfdff, #ffffff);
+}
+
+.artifact-group-title {
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.artifact-group-desc {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  margin-bottom: 12px;
+}
+
 .coreg-gallery {
   display: grid;
   gap: 18px;
@@ -1071,6 +1095,14 @@ tr.row-fail:hover td.active-sort-cell {
   padding: 10px 12px 12px;
   font-size: 0.9rem;
   color: var(--muted);
+}
+
+.figure-meta {
+  margin-top: 5px;
+  color: #475467;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
 }
 
 .figure.flagged {
@@ -2230,6 +2262,17 @@ def copy_asset(src: Path, output_root: Path, subject_slug: str, category: str) -
     raise ValueError(f"Unsupported asset type for copy: {src}")
 
 
+def copy_asset_as(src: Path, output_root: Path, subject_slug: str, category: str, file_name: str) -> str:
+    ext = src.suffix.lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".gif", ".svg", ".json", ".csv", ".txt", ".jl", ".html"}:
+        raise ValueError(f"Unsupported asset type for copy: {src}")
+    category_dir = ensure_dir(output_root / "files" / subject_slug / category)
+    safe_name = sanitize_name(Path(file_name).stem) + ext
+    dest = category_dir / safe_name
+    shutil.copy2(src, dest)
+    return dest.relative_to(output_root).as_posix()
+
+
 def copy_text_blob(text: str, output_root: Path, rel_path: Path) -> str:
     dest = output_root / rel_path
     ensure_dir(dest.parent)
@@ -2651,7 +2694,30 @@ def parse_epochs_log(log_file: Path) -> dict[str, Any]:
     return data
 
 
-def select_artifact_images(artifact_dir: Path, max_overview: int = 3, max_waveform: int = 3) -> dict[str, list[Path]]:
+def artifact_segment_time(file_path: Path) -> str:
+    stem = file_path.stem
+    if stem.startswith("seg_"):
+        return stem[4:]
+    return stem
+
+
+def artifact_segment_caption(segment_time: str) -> str:
+    value = str(segment_time).strip()
+    try:
+        return f"Start time {float(value):g} s"
+    except ValueError:
+        return f"Start time {value}"
+
+
+def artifact_segment_sort_key(file_path: Path) -> tuple[float, str]:
+    value = artifact_segment_time(file_path)
+    try:
+        return (float(value), file_path.name)
+    except ValueError:
+        return (float("inf"), file_path.name)
+
+
+def select_artifact_images(artifact_dir: Path, max_overview: int = 3, max_waveform: int = 3) -> dict[str, list[dict[str, Any]]]:
     result = {"overview": [], "waveform": []}
     check_imgs_dir = artifact_dir / "check_imgs"
     if not check_imgs_dir.exists():
@@ -2674,8 +2740,16 @@ def select_artifact_images(artifact_dir: Path, max_overview: int = 3, max_wavefo
         if target_dir is None:
             target_dir = channel_dirs[0]
 
-        files = sorted(target_dir.glob("seg_*.jpg"))
-        result[plot_type] = pick_evenly_spaced(files, limit)
+        files = sorted(target_dir.glob("seg_*.jpg"), key=artifact_segment_sort_key)
+        selected_files = sorted(pick_evenly_spaced(files, limit), key=artifact_segment_sort_key)
+        result[plot_type] = [
+            {
+                "path": file_path,
+                "channel_group": target_dir.name,
+                "segment_time": artifact_segment_time(file_path),
+            }
+            for file_path in selected_files
+        ]
 
     return result
 
@@ -2856,20 +2930,36 @@ def collect_subject_data(
                 "title": "Artifact mask heatmap",
                 "rel_path": rel,
                 "category": "Artifacts",
+                "artifact_group": "mask",
                 "figure_class": "wide",
             }
         )
 
     selected_artifact_images = select_artifact_images(artifact_dir)
-    for label, file_paths in selected_artifact_images.items():
-        for idx, file_path in enumerate(file_paths, start=1):
-            rel = copy_asset(file_path, output_root, subject_slug, "artifacts")
-            asset = AssetRecord(
-                title=f"{label.capitalize()} view {idx}",
-                rel_path=rel,
-                category="Artifacts",
+    for label, image_records in selected_artifact_images.items():
+        for idx, image_record in enumerate(image_records, start=1):
+            file_path = image_record["path"]
+            channel_group = image_record["channel_group"]
+            segment_time = image_record["segment_time"]
+            rel = copy_asset_as(
+                file_path,
+                output_root,
+                subject_slug,
+                "artifacts",
+                f"{label}_{channel_group}_{file_path.name}",
             )
-            artifact_data["assets"].append(asset.__dict__)
+            group_title = "Overview" if label == "overview" else "Waveform"
+            artifact_data["assets"].append(
+                {
+                    "title": f"{group_title} view {idx}",
+                    "rel_path": rel,
+                    "category": "Artifacts",
+                    "artifact_group": label,
+                    "channel_group": channel_group,
+                    "segment_time": segment_time,
+                    "details": artifact_segment_caption(segment_time),
+                }
+            )
 
     artifact_data["bad_channels_count"] = len(artifact_data["bad_channels"])
     artifact_data["exists"] = artifact_dir.exists() and (
@@ -3320,11 +3410,46 @@ def render_gallery(assets: list[dict[str, Any]], prefix: str = "") -> str:
             <div class="figure {figure_class}">
               {badge_html}
               <a href="{rel}" target="_blank"><img src="{rel}" alt="{title}"></a>
-              <div class="caption">{title}</div>
+              <div class="caption">{title}{f'<div class="figure-meta">{html_text(asset.get("details", ""))}</div>' if asset.get("details") else ''}</div>
             </div>
             """
         )
     return '<div class="gallery">' + "".join(blocks) + "</div>"
+
+
+def render_artifact_gallery(assets: list[dict[str, Any]], prefix: str = "") -> str:
+    if not assets:
+        return '<div class="small">No images packaged for this section.</div>'
+    groups = [
+        ("mask", "Bad channel / bad segment mask", "Compact mask overview of detected bad channels and bad segments."),
+        ("overview", "Overview plots", "Segment overview images; captions keep the source channel folder and seg_<time> token."),
+        ("waveform", "Waveform plots", "Waveform images copied from the selected chn.* folder; captions keep that source folder."),
+    ]
+    blocks = []
+    for group_key, title, desc in groups:
+        group_assets = [asset for asset in assets if asset.get("artifact_group") == group_key]
+        if not group_assets:
+            continue
+        blocks.append(
+            f"""
+            <div class="artifact-group">
+              <div class="artifact-group-title">{html_text(title)}</div>
+              <div class="artifact-group-desc">{html_text(desc)}</div>
+              {render_gallery(group_assets, prefix=prefix)}
+            </div>
+            """
+        )
+    other_assets = [asset for asset in assets if asset.get("artifact_group") not in {group[0] for group in groups}]
+    if other_assets:
+        blocks.append(
+            f"""
+            <div class="artifact-group">
+              <div class="artifact-group-title">Additional artifact figures</div>
+              {render_gallery(other_assets, prefix=prefix)}
+            </div>
+            """
+        )
+    return '<div class="artifact-gallery">' + "".join(blocks) + "</div>"
 
 
 def coreg_asset_stage_and_view(asset: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -3717,7 +3842,7 @@ def build_subject_html(summary: dict[str, Any], output_root: Path) -> None:
       <h2>Artifact Review</h2>
       <div class="two-col">
         <div class="panel">
-          {render_gallery(summary['artifacts']['assets'], prefix="../")}
+          {render_artifact_gallery(summary['artifacts']['assets'], prefix="../")}
         </div>
         <div class="panel">
           <div class="metric-list">
@@ -3909,7 +4034,10 @@ def build_index_html(dataset_summary: dict[str, Any], subject_summaries: list[di
             """
         )
 
-    hot_subjects = sorted_subjects[:12]
+    priority_subjects = [
+        summary for summary in sorted_subjects if summary["status"] != "PASS" or summary["alarm_count"] > 0
+    ]
+    hot_subjects = priority_subjects[:12]
     alarm_rows = []
     for summary in hot_subjects:
         if not summary["alarms"]:
@@ -3927,7 +4055,7 @@ def build_index_html(dataset_summary: dict[str, Any], subject_summaries: list[di
             )
 
     top_subject_cards = []
-    for summary in hot_subjects[:6]:
+    for summary in priority_subjects[:6]:
         top_subject_cards.append(
             f"""
             <div class="top-subject-item">
@@ -3940,6 +4068,11 @@ def build_index_html(dataset_summary: dict[str, Any], subject_summaries: list[di
             </div>
             """
         )
+    priority_placeholder = (
+        '<div class="small">All subjects passed the current static thresholds.</div>'
+        if not priority_subjects
+        else '<div class="small">No subjects available.</div>'
+    )
 
     threshold_cards = [
         ("Bad channels above threshold", threshold_counts["bad_channels"]),
@@ -4142,7 +4275,7 @@ def build_index_html(dataset_summary: dict[str, Any], subject_summaries: list[di
           </div>
         </div>
         <div class="top-subject-list">
-          {''.join(top_subject_cards) or '<div class="small">No subjects available.</div>'}
+          {''.join(top_subject_cards) or priority_placeholder}
         </div>
       </div>
     </div>
